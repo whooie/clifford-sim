@@ -1,6 +1,6 @@
 # Measurement-induced phase transition simulations
 
-Tools for simulation measurement-induced phase transitions in *N*-qubit systems.
+Tools for simulating measurement-induced phase transitions in *N*-qubit systems.
 
 Currently supported:
 - Efficient simulation via the Gottesman-Knill tableau representation of
