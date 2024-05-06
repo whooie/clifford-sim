@@ -1,0 +1,37 @@
+[package]
+name = "clifford-sim"
+version = "0.1.0"
+authors = [ "whooie <wcwhuie@gmail.com>",]
+edition = "2021"
+
+[dependencies]
+# indexmap = "*"
+itertools = "0.12.1"
+ndarray = "0.15.6"
+# ndarray-npy = "0.8.1"
+num-complex = "0.4.5"
+# num-rational = "0.4.1"
+# num-traits = "0.2.18"
+rand = "0.8.5"
+rustc-hash = "1.1.0"
+# thiserror = "1.0.5"
+
+[lib]
+path = "lib/lib.rs"
+name = "clifford_sim"
+
+[dependencies.ndarray-linalg]
+version = "0.16.0"
+features = [ "openblas-system",]
+
+# [dependencies.whooie]
+# git = "https://gitlab.com/whooie/rust-lib.git"
+# version = "*"
+# features = [ "nd", "ndarray-utils", "math", "plotting", "pyo3-utils",]
+
+[dev-dependencies]
+rand = "0.8.5"
+
+[profile.release]
+lto = true
+panic = "abort"
