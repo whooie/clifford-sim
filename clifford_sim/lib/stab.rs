@@ -71,7 +71,7 @@
 
 use std::fmt;
 use ndarray::{ self as nd, s };
-use ndarray_linalg::SVD;
+// use ndarray_linalg::SVD;
 use rand::Rng;
 use crate::gate::{ Gate, Pauli, Phase };
 
@@ -591,36 +591,45 @@ impl<const N: usize> Stab<N> {
         tab
     }
 
-    fn do_entanglement_entropy(
-        tab: &nd::Array2<f32>, // shape N x 2N
-        subtab: &mut nd::Array2<f32>, // shape N x N
-        cut: usize,
-    ) -> f32
-    {
-        let n = cut.min(N - cut);
-        if cut <= N / 2 {
-            subtab.slice_mut(nd::s![.., ..n])
-                .assign(&tab.slice(nd::s![.., ..cut]));
-            subtab.slice_mut(nd::s![.., n..2 * n])
-                .assign(&tab.slice(nd::s![.., N..N + cut]));
-        } else {
-            subtab.slice_mut(nd::s![.., ..n])
-                .assign(&tab.slice(nd::s![.., cut..N]));
-            subtab.slice_mut(nd::s![.., n..2 * n])
-                .assign(&tab.slice(nd::s![.., N + cut..]));
-        }
-        let (_, s, _): (_, nd::Array1<f32>, _)
-            = subtab.slice(nd::s![.., ..2 * n]).svd(false, false).unwrap();
-        let smax: f32
-            = s.iter()
-            .max_by(|l, r| {
-                l.partial_cmp(r).unwrap_or(std::cmp::Ordering::Greater)
-            })
-            .copied()
-            .unwrap();
-        let eps: f32 = smax * (N as f32) * f32::EPSILON;
-        s.into_iter().filter(|sk| *sk > eps).count() as f32 - n as f32
-    }
+    // // calculate entanglement entropy across a single bipartition with `cut` on
+    // // one side and `N - cut` qubits on the other
+    // //
+    // // this calculation does so by isolating all columns in a bare tableau
+    // // belonging to the first `cut` or last `N - cut` (whichever is smaller) and
+    // // finding the rank of the resulting binary matrix via SVD. this works
+    // // because for stabilizer states, the Rényi entropy (a common measure of
+    // // entanglement entropy) is independent of its index and can be written in
+    // // this simpler form.
+    // fn do_entanglement_entropy(
+    //     tab: &nd::Array2<f32>, // shape N x 2N
+    //     subtab: &mut nd::Array2<f32>, // shape N x N
+    //     cut: usize,
+    // ) -> f32
+    // {
+    //     let n = cut.min(N - cut);
+    //     if cut <= N / 2 {
+    //         subtab.slice_mut(nd::s![.., ..n])
+    //             .assign(&tab.slice(nd::s![.., ..cut]));
+    //         subtab.slice_mut(nd::s![.., n..2 * n])
+    //             .assign(&tab.slice(nd::s![.., N..N + cut]));
+    //     } else {
+    //         subtab.slice_mut(nd::s![.., ..n])
+    //             .assign(&tab.slice(nd::s![.., cut..N]));
+    //         subtab.slice_mut(nd::s![.., n..2 * n])
+    //             .assign(&tab.slice(nd::s![.., N + cut..]));
+    //     }
+    //     let (_, s, _): (_, nd::Array1<f32>, _)
+    //         = subtab.slice(nd::s![.., ..2 * n]).svd(false, false).unwrap();
+    //     let smax: f32
+    //         = s.iter()
+    //         .max_by(|l, r| {
+    //             l.partial_cmp(r).unwrap_or(std::cmp::Ordering::Greater)
+    //         })
+    //         .copied()
+    //         .unwrap();
+    //     let eps: f32 = smax * (N as f32) * f32::EPSILON;
+    //     s.into_iter().filter(|sk| *sk > eps).count() as f32 //- n as f32
+    // }
 
     /// Calculate the entanglement entropy of the state as the average over all
     /// bipartitions.
@@ -632,12 +641,9 @@ impl<const N: usize> Stab<N> {
     /// [arxiv2]: https://arxiv.org/abs/1608.06950
     /// [stackex]: https://quantumcomputing.stackexchange.com/questions/16718/measuring-entanglement-entropy-using-a-stabilizer-circuit-simulator
     pub fn entanglement_entropy(&self) -> f32 {
-        let tab: nd::Array2<f32> = self.as_tableau_f32();
-        let mut subtab: nd::Array2<f32> = nd::Array2::zeros((N, N));
         (1..N - 1)
             .map(|cut| {
-                Self::do_entanglement_entropy(&tab, &mut subtab, cut)
-                    / (N - 1) as f32
+                self.entanglement_entropy_single(Some(cut)) / (N - 1) as f32
             })
             .sum()
     }
@@ -647,11 +653,38 @@ impl<const N: usize> Stab<N> {
     ///
     /// See also [`Self::entanglement_entropy`].
     pub fn entanglement_entropy_single(&self, cut: Option<usize>) -> f32 {
+        let mut j5 = 0;
+        let mut pw = 0;
         let cut = cut.unwrap_or(N / 2);
-        let n = cut.min(N - cut);
-        let tab: nd::Array2<f32> = self.as_tableau_f32();
-        let mut subtab: nd::Array2<f32> = nd::Array2::zeros((N, 2 * n));
-        Self::do_entanglement_entropy(&tab, &mut subtab, cut)
+        if cut <= N / 2 {
+            let n
+                = self.x.axis_iter(nd::Axis(0))
+                .zip(self.z.axis_iter(nd::Axis(0)))
+                .take(N)
+                .filter(|(xi, zi)| {
+                    (0..cut).all(|j| {
+                        j5 = j >> 5;
+                        pw = PW[j & 31];
+                        xi[j5] & pw == 0 && zi[j5] & pw == 0
+                    })
+                })
+                .count() as f32;
+            (N - cut) as f32 - n
+        } else {
+            let n
+                = self.x.axis_iter(nd::Axis(0))
+                .zip(self.z.axis_iter(nd::Axis(0)))
+                .take(N)
+                .filter(|(xi, zi)| {
+                    (cut..N).all(|j| {
+                        j5 = j >> 5;
+                        pw = PW[j & 31];
+                        xi[j5] & pw == 0 && zi[j5] & pw == 0
+                    })
+                })
+                .count() as f32;
+            cut as f32 - n
+        }
     }
 
     // do Gaussian elimination to put the stabilizer generators in the following
@@ -844,6 +877,14 @@ pub enum Outcome {
     Rand0,
     /// A random outcome resulting in ∣1⟩
     Rand1,
+}
+
+impl Outcome {
+    /// Returns `true` if `self` is `Det0` or `Rand0`.
+    pub fn is_0(&self) -> bool { matches!(self, Self::Det0 | Self::Rand0) }
+
+    /// Returns `true` if `self` is `Det1` or `Rand1`.
+    pub fn is_1(&self) -> bool { matches!(self, Self::Det1 | Self::Rand1) }
 }
 
 /// A post-selected measurement result, required by [`Stab::measure_postsel`].

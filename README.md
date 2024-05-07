@@ -12,5 +12,5 @@ Currently supported:
 Planned:
 - Complete randomized Clifford circuits with probabilistic measurements and
   post-selection
-- Renormalization methods
+- Renormalization group methods
 

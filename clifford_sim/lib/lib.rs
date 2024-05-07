@@ -10,3 +10,4 @@
 pub mod tree;
 pub mod stab;
 pub mod gate;
+pub mod circuit;

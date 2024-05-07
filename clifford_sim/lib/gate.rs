@@ -215,6 +215,7 @@ impl Gate {
     }
 }
 
+/// A single-qubit Pauli operator.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pauli {
     /// Identity

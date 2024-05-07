@@ -1,0 +1,28 @@
+[package]
+name = "workspace"
+version = "0.1.0"
+authors = [ "whooie <wcwhuie@gmail.com>",]
+edition = "2021"
+
+[dependencies]
+clifford-sim = { path = "../clifford_sim", version = "*" }
+ndarray = "0.15.6"
+# thiserror = "*"
+# anyhow = "*"
+
+[dependencies.whooie]
+git = "https://gitlab.com/whooie/rust-lib.git"
+version = "*"
+features = [ "ndarray-utils",]
+
+[lib]
+path = "lib/lib.rs"
+name = "lib"
+
+[[bin]]
+path = "src/entropy_test.rs"
+name = "entropy_test"
+
+[profile.release]
+lto = true
+panic = "abort"
