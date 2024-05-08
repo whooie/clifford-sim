@@ -88,7 +88,7 @@ pub struct Stab<const N: usize> {
     // the columns are packed into u32s
     x: nd::Array2<u32>, // Pauli-X bits; size (2N + 1) x (floor(N / 8) + 1)
     z: nd::Array2<u32>, // Pauli-Z bits; size (2N + 1) x (floor(N / 8) + 1)
-    r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1 3 for -i); size 2N + 1
+    r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2N + 1
     over32: usize, // = floor(N / 8) + 1
 }
 
@@ -826,7 +826,6 @@ impl<const N: usize> Stab<N> {
         }
         Some(State(acc))
     }
-
 }
 
 /// A single `N`-qubit Pauli operator with a phase.

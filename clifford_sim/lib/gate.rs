@@ -547,7 +547,7 @@ impl<const N: usize> Tableau<N> {
 
 /// Specify the basis in which to perform a projective measurement.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Measure {
+pub enum Basis {
     /// X-basis
     X,
     /// Y-basis
@@ -556,7 +556,7 @@ pub enum Measure {
     Z,
 }
 
-impl Measure {
+impl Basis {
     /// Return the possible outcomes for a given measurement basis, with the
     /// plus state first.
     pub(crate) fn outcomes(self) -> (Qubit, Qubit) {
