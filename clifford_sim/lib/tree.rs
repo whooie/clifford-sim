@@ -32,7 +32,7 @@ use itertools::Itertools;
 use ndarray as nd;
 use num_complex::Complex64 as C64;
 use rustc_hash::FxHasher;
-use crate::gate::{ Gate, Measure, Phase };
+use crate::gate::{ Gate, Basis, Phase };
 
 /* Qubit **********************************************************************/
 
@@ -205,8 +205,8 @@ pub enum Pure<const N: usize> {
     Null,
     /// A pure state comprising only a single register state.
     Single(Register<N>),
-    /// A pure state comprising the (even) superposition of two pure states,
-    /// with a relative phase, defined as that of the second with respect to the
+    /// A pure state comprising the (even) superposition of two pure states
+    /// with a relative phase defined as that of the second with respect to the
     /// first.
     Superpos(Box<Pure<N>>, Box<Pure<N>>, Phase),
 }
@@ -362,19 +362,21 @@ impl<const N: usize> Pure<N> {
                 $reg:ident,
                 $c:ident,
                 $t:ident,
-                $target:expr,
+                $targetl:expr,
+                $targetr:expr,
                 $rel_ph:expr,
                 $glob_ph:expr
             ) => {
                 {
                     let mut l = *$reg;
                     l[$c] = Zp;
+                    l[$t] = $targetl;
                     let mut r = *$reg;
                     r[$c] = Zm;
-                    r[$t] = $target;
+                    r[$t] = $targetr;
                     *$self = Self::Superpos(
                         Box::new(l.into()), Box::new(r.into()), $rel_ph);
-                    $glob_ph
+                    Some($glob_ph)
                 }
             }
         }
@@ -427,30 +429,30 @@ impl<const N: usize> Pure<N> {
                     (Xm, Xp) => { Some(Pi0) },
                     (Xm, Xm) => { reg[a] = Xp; Some(Pi0) },
                     //
-                    (Xp, Yp) => { Some(Pi0) },
-                    (Xp, Ym) => { reg[a] = Xm; Some(Pi0) },
-                    (Xm, Yp) => { Some(Pi0) },
-                    (Xm, Ym) => { reg[a] = Xp; Some(Pi0) },
+                    (Xp, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi1h, Pi0) },
+                    (Xp, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi3h, Pi0) },
+                    (Xm, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi3h, Pi0) },
+                    (Xm, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi1h, Pi0) },
                     //
-                    (Xp, Zp) => { cnot!(self, reg, a, b, Zm, Pi0, Some(Pi0)) },
-                    (Xp, Zm) => { cnot!(self, reg, a, b, Zp, Pi0, Some(Pi0)) },
-                    (Xm, Zp) => { cnot!(self, reg, a, b, Zm, Pi,  Some(Pi0)) },
-                    (Xm, Zm) => { cnot!(self, reg, a, b, Zp, Pi,  Some(Pi0)) },
+                    (Xp, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi0,  Pi0) },
+                    (Xp, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi0,  Pi0) },
+                    (Xm, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi,   Pi0) },
+                    (Xm, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi,   Pi0) },
                     //
                     (Yp, Xp) => { Some(Pi0) },
                     (Yp, Xm) => { reg[a] = Ym; Some(Pi0) },
                     (Ym, Xp) => { Some(Pi0) },
                     (Ym, Xm) => { reg[a] = Yp; Some(Pi0) },
                     //
-                    (Yp, Yp) => { Some(Pi0) },
-                    (Yp, Ym) => { reg[a] = Ym; Some(Pi0) },
-                    (Ym, Yp) => { Some(Pi0) },
-                    (Ym, Ym) => { reg[a] = Yp; Some(Pi0) },
+                    (Yp, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi,   Pi0) },
+                    (Yp, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi0,  Pi0) },
+                    (Ym, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi0,  Pi0) },
+                    (Ym, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi,   Pi0) },
                     //
-                    (Yp, Zp) => { cnot!(self, reg, a, b, Zm, Pi0, Some(Pi3h)) },
-                    (Yp, Zm) => { cnot!(self, reg, a, b, Zp, Pi0, Some(Pi3h)) },
-                    (Ym, Zp) => { cnot!(self, reg, a, b, Zm, Pi,  Some(Pi3h)) },
-                    (Ym, Zm) => { cnot!(self, reg, a, b, Zp, Pi,  Some(Pi3h)) },
+                    (Yp, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi1h, Pi0) },
+                    (Yp, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi1h, Pi0) },
+                    (Ym, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi3h, Pi0) },
+                    (Ym, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi3h, Pi0) },
                     //
                     (Zp, Xp) => { Some(Pi0) },
                     (Zp, Xm) => { Some(Pi0) },
@@ -459,8 +461,8 @@ impl<const N: usize> Pure<N> {
                     //
                     (Zp, Yp) => { Some(Pi0) },
                     (Zp, Ym) => { Some(Pi0) },
-                    (Zm, Yp) => { Some(Pi0) },
-                    (Zm, Ym) => { Some(Pi) },
+                    (Zm, Yp) => { reg[b] = Ym; Some(Pi1h) },
+                    (Zm, Ym) => { reg[b] = Yp; Some(Pi3h) },
                     //
                     (Zp, Zp) => { Some(Pi0) },
                     (Zp, Zm) => { Some(Pi0) },
@@ -528,7 +530,7 @@ impl<const N: usize> Pure<N> {
                                 | (Zp, Zm) | (Zm, Zp)
                             )
                         )
-                        .then_some(Pi0)
+                        .then(|| { *q = outcome; Pi0 })
                     })
             },
             Self::Superpos(l, r, ph) => {
@@ -540,18 +542,12 @@ impl<const N: usize> Pure<N> {
                         None
                     },
                     (None, Some(ph_r)) => {
-                        let Self::Single(new)
-                            = std::mem::take(r.deref_mut())
-                            else { unreachable!() };
                         let ph = *ph;
-                        *self = Self::Single(new);
+                        *self = std::mem::replace(r.deref_mut(), Self::Null);
                         Some(ph + ph_r)
                     },
                     (Some(ph_l), None) => {
-                        let Self::Single(new)
-                            = std::mem::take(l.deref_mut())
-                            else { unreachable!() };
-                        *self = Self::Single(new);
+                        *self = std::mem::replace(l.deref_mut(), Self::Null);
                         Some(ph_l)
                     },
                     (Some(ph_l), Some(ph_r)) => {
@@ -686,11 +682,11 @@ impl<const N: usize> State<N> {
     }
 
     /// Perform a projective measurement on a single qubit.
-    pub fn measure(&mut self, index: usize, meas: Measure) {
+    pub fn measure(&mut self, index: usize, basis: Basis) {
         match self {
             Self::Null => { },
             Self::Pure(pure) => {
-                let (op, om) = meas.outcomes();
+                let (op, om) = basis.outcomes();
                 let mut pure_alt = pure.clone();
                 pure.measure(index, op);
                 pure_alt.measure(index, om);
@@ -699,26 +695,22 @@ impl<const N: usize> State<N> {
                     (true,  false) => { *pure = pure_alt; },
                     (false, true ) => { },
                     (false, false) => {
-                        let pure = std::mem::take(pure);
+                        let pure = std::mem::replace(pure, Pure::Null);
                         *self = Self::Mixed(
                             Box::new(pure.into()), Box::new(pure_alt.into()));
                     },
                 }
             }
             Self::Mixed(l, r) => {
-                l.measure(index, meas);
-                r.measure(index, meas);
+                l.measure(index, basis);
+                r.measure(index, basis);
                 match (l.is_null(), r.is_null()) {
                     (true,  true ) => { *self = Self::Null; },
                     (true,  false) => {
-                        let Self::Pure(new)
-                            = *r.clone() else { unreachable!() };
-                        *self = Self::Pure(new);
+                        *self = std::mem::replace(r.deref_mut(), State::Null);
                     },
                     (false, true ) => {
-                        let Self::Pure(new)
-                            = *l.clone() else { unreachable!() };
-                        *self = Self::Pure(new);
+                        *self = std::mem::replace(l.deref_mut(), State::Null);
                     },
                     (false, false) => { },
                 }
