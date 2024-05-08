@@ -9,5 +9,6 @@
 
 pub mod tree;
 pub mod stab;
+pub mod stabd;
 pub mod gate;
 pub mod circuit;
