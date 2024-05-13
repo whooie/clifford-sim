@@ -1,6 +1,6 @@
 -- | Definitions for classical mixtures of pure states.
 module Cliff.Tree.State
-  ( State (..)
+  ( State
   , stateNew
   , stateIsEmpty
   , stateIsPure
@@ -31,17 +31,17 @@ data State =
 stateNew :: Natural -> State
 stateNew = Pure . pureNew
 
--- | Return @True@ if the state is `Empty`.
+-- | Return @True@ if the state is empty.
 stateIsEmpty :: State -> Bool
 stateIsEmpty Empty = True
 stateIsEmpty _     = False
 
--- | Return @True@ if the state is `Pure`.
+-- | Return @True@ if the state is pure.
 stateIsPure :: State -> Bool
 stateIsPure (Pure _) = True
 stateIsPure _        = False
 
--- | Return @True@ if the state is `Mixed`.
+-- | Return @True@ if the state is mixed.
 stateIsMixed :: State -> Bool
 stateIsMixed (Mixed _ _) = True
 stateIsMixed _           = False

@@ -108,6 +108,7 @@ data Gate =
   | CX Int Int
   -- | Swap
   | Swap Int Int
+  deriving (Eq, Show)
 
 -- | Return @True@ if the gate is `H`.
 gateIsH :: Gate -> Bool

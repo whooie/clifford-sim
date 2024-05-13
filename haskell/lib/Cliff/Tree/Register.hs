@@ -15,7 +15,10 @@ import Cliff.Gate
 import Cliff.Tree.Qubit
 
 -- | A list of `Qubit`s.
-data Register = Register [Qubit] deriving (Eq, Show)
+data Register = Register [Qubit] deriving (Eq)
+
+instance Show Register where
+  show (Register qq) = show qq
 
 -- | Create a new register of qubits initialized to all `Zp`.
 regNew :: Natural -> Register

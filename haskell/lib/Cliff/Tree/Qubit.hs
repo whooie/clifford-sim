@@ -7,6 +7,7 @@ module Cliff.Tree.Qubit
   , qY
   , qZ
   , qS
+  , qBasis
   , Basis (..)
   , basisOutcomes
   , basisPlus
@@ -15,7 +16,6 @@ module Cliff.Tree.Qubit
   , basisGen
   ) where
 
-import System.Random.Stateful (StatefulGen, StdGen)
 import Cliff.Gate
 import Cliff.Random
 
@@ -87,8 +87,17 @@ qS Ym = (Xp, Pi0 )
 qS Zp = (Zp, Pi0 )
 qS Zm = (Zm, Pi1h)
 
+-- | Get the basis of a qubit.
+qBasis :: Qubit -> Basis
+qBasis Xp = MeasX
+qBasis Xm = MeasX
+qBasis Yp = MeasY
+qBasis Ym = MeasY
+qBasis Zp = MeasZ
+qBasis Zm = MeasZ
+
 -- | A measurement basis.
-data Basis = MeasX | MeasY | MeasZ
+data Basis = MeasX | MeasY | MeasZ deriving (Eq, Enum, Show)
 
 -- | Return the possible outcomes for a measurement basis, with the plus state
 -- first.
@@ -117,8 +126,14 @@ basisIsElem _     _  = False
 
 -- | Randomly select the plus or minus state of a measurement basis with equal
 -- probability.
-basisGen :: StatefulGen r Maybe => r -> Basis -> Qubit
-basisGen rng MeasX = if genb rng then Xp else Xm
-basisGen rng MeasY = if genb rng then Yp else Ym
-basisGen rng MeasZ = if genb rng then Zp else Zm
+basisGen :: Basis -> R Qubit
+basisGen MeasX = do
+  b <- randBool
+  return $ if b then Xp else Xm
+basisGen MeasY = do
+  b <- randBool
+  return $ if b then Yp else Ym
+basisGen MeasZ = do
+  b <- randBool
+  return $ if b then Zp else Zm
 

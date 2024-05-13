@@ -40,7 +40,7 @@ module Cliff.Tree
   , regSwap
   , regOp
   , regOpPh
-  , Pure (..)
+  , Pure
   , pureNew
   , pureIsNull
   , pureIsSingle
@@ -50,7 +50,7 @@ module Cliff.Tree
   , pureApplyGate
   , pureApplyCircuit
   , pureMeasure
-  , State (..)
+  , State
   , stateNew
   , stateIsEmpty
   , stateIsPure
