@@ -1,11 +1,13 @@
 //! Like [`stab`][crate::stab], but not statically sized.
 
 use std::fmt;
-use ndarray:: { self as nd, s };
+use ndarray::{ self as nd, s };
 use rand::Rng;
 use crate::{
     gate::{ Gate, Pauli, Phase },
-    stab::{ Outcome, Postsel, Qubit },
+    graph::Graph,
+    graphd::GraphD,
+    stab::{ Outcome, Postsel, Qubit, Stab },
 };
 
 const PW: [u32; 32] = [ // PW[i] = 2^i
@@ -17,16 +19,22 @@ const PW: [u32; 32] = [ // PW[i] = 2^i
 /// A stabilizer state of a finite register of qubits, identified by its
 /// stabilizer group.
 ///
-/// Like [`Stab`][crate::stab::Stab], but for non-static system sizes.
+/// Like [`Stab`], but for non-static system sizes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StabD {
-    n: usize,
+    pub(crate) n: usize,
     // `x` and `z` are bit arrays of size (2n + 1) × n; for space efficiency,
     // the columns are packed into u32s
-    x: nd::Array2<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
-    z: nd::Array2<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
-    r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
-    over32: usize, // = floor(N / 8) + 1
+    pub(crate) x: nd::Array2<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) z: nd::Array2<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
+    pub(crate) over32: usize, // = floor(N / 8) + 1
+}
+
+impl<const N: usize> From<Stab<N>> for StabD {
+    fn from(stab: Stab<N>) -> Self {
+        Self { n: N, x: stab.x, z: stab.z, r: stab.r, over32: stab.over32 }
+    }
 }
 
 impl StabD {
@@ -49,7 +57,7 @@ impl StabD {
         q
     }
 
-    fn row_iter(&self)
+    pub(crate) fn row_iter(&self)
         -> impl Iterator<
             Item = ((nd::ArrayView1<u32>, nd::ArrayView1<u32>), nd::ArrayView0<u8>)
         >
@@ -60,7 +68,7 @@ impl StabD {
             .take(2 * self.n)
     }
 
-    fn row_iter_mut(&mut self)
+    pub(crate) fn row_iter_mut(&mut self)
         -> impl Iterator<
             Item = ((nd::ArrayViewMut1<u32>, nd::ArrayViewMut1<u32>), nd::ArrayViewMut0<u8>)
         >
@@ -71,21 +79,21 @@ impl StabD {
             .take(2 * self.n)
     }
 
-    fn col_iter(&self)
+    pub(crate) fn col_iter(&self)
         -> impl Iterator<Item = (nd::ArrayView1<u32>, nd::ArrayView1<u32>)>
     {
         self.x.axis_iter(nd::Axis(1))
             .zip(self.z.axis_iter(nd::Axis(1)))
     }
 
-    fn col_iter_mut(&mut self)
+    pub(crate) fn col_iter_mut(&mut self)
         -> impl Iterator<Item = (nd::ArrayViewMut1<u32>, nd::ArrayViewMut1<u32>)>
     {
         self.x.axis_iter_mut(nd::Axis(1))
             .zip(self.z.axis_iter_mut(nd::Axis(1)))
     }
 
-    fn apply_h(&mut self, k: usize) -> &mut Self {
+    pub fn apply_h(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
         let mut tmp: u32;
@@ -111,7 +119,7 @@ impl StabD {
         self
     }
 
-    fn apply_s(&mut self, k: usize) -> &mut Self {
+    pub fn apply_s(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
         for ((x_i_k5, z_i_k5), r_i) in
@@ -132,19 +140,19 @@ impl StabD {
         self
     }
 
-    fn apply_x(&mut self, k: usize) -> &mut Self {
+    pub fn apply_x(&mut self, k: usize) -> &mut Self {
         self.apply_h(k).apply_z(k).apply_h(k)
     }
 
-    fn apply_y(&mut self, k: usize) -> &mut Self {
+    pub fn apply_y(&mut self, k: usize) -> &mut Self {
         self.apply_s(k).apply_x(k).apply_z(k).apply_s(k)
     }
 
-    fn apply_z(&mut self, k: usize) -> &mut Self {
+    pub fn apply_z(&mut self, k: usize) -> &mut Self {
         self.apply_s(k).apply_s(k)
     }
 
-    fn apply_cnot(&mut self, a: usize, b: usize) -> &mut Self {
+    pub fn apply_cnot(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
         let pwa: u32 = PW[a & 31];
@@ -177,7 +185,7 @@ impl StabD {
         self
     }
 
-    fn apply_swap(&mut self, a: usize, b: usize) -> &mut Self {
+    pub fn apply_swap(&mut self, a: usize, b: usize) -> &mut Self {
         self.apply_cnot(a, b).apply_cnot(b, a).apply_cnot(a, b)
     }
 
@@ -205,7 +213,7 @@ impl StabD {
         self
     }
 
-    fn row_copy(&mut self, a: usize, b: usize) -> &mut Self {
+    pub(crate) fn row_copy(&mut self, a: usize, b: usize) -> &mut Self {
         // set row b equal to row a
         for (mut x__j, mut z__j) in
             self.x.axis_iter_mut(nd::Axis(1))
@@ -222,7 +230,7 @@ impl StabD {
         self
     }
 
-    fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
+    pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
         let n = self.n;
         // swap rows a and b
         self.row_copy(b, 2 * n)
@@ -231,7 +239,7 @@ impl StabD {
     }
 
     // set row k equal to the o-th observable (X_1, ... X_n, Z_1, ..., Z_n)
-    fn row_set(&mut self, o: usize, k: usize) -> &mut Self {
+    pub(crate) fn row_set(&mut self, o: usize, k: usize) -> &mut Self {
         let o5: usize;
         let o31: usize;
         self.x.slice_mut(nd::s![k, ..]).fill(0);
@@ -250,7 +258,7 @@ impl StabD {
     }
 
     // return the phase (0, ..., 3) when row b is left-multiplied by row a
-    fn row_mul_phase(&self, a: usize, b: usize) -> u8 {
+    pub(crate) fn row_mul_phase(&self, a: usize, b: usize) -> u8 {
         let mut e: i32 = 0;
         let xa = self.x.slice(nd::s![a, ..]);
         let xb = self.x.slice(nd::s![b, ..]);
@@ -307,7 +315,7 @@ impl StabD {
     }
 
     // left-multiply row b by row a
-    fn row_mul(&mut self, a: usize, b: usize) -> &mut Self {
+    pub(crate) fn row_mul(&mut self, a: usize, b: usize) -> &mut Self {
         self.r[b] = self.row_mul_phase(a, b);
         for (mut x__j, mut z__j) in
             self.x.axis_iter_mut(nd::Axis(1))
@@ -385,9 +393,10 @@ impl StabD {
     ///
     /// The tradeoff is that if the desired outcome is incompatible with `self`,
     /// the `self` must be invalidated. This method therefore consumes `self`,
-    /// returning it as a [`Some`] if the post-selection was valid and [`None`]
+    /// returning it as a [`Ok`] if the post-selection was valid and [`Err`]
     /// otherwise.
-    pub fn measure_postsel(mut self, k: usize, postsel: Postsel) -> Option<Self>
+    pub fn measure_postsel(mut self, k: usize, postsel: Postsel)
+        -> Result<Self, Box<Self>>
     {
         let mut rnd: bool = false;
         let k5: usize = k >> 5;
@@ -412,7 +421,7 @@ impl StabD {
             for i in 0..2 * self.n {
                 if i != p && self.x[[i, k5]] & pw != 0 { self.row_mul(p, i); }
             }
-            Some(self)
+            Ok(self)
         } else {
             for (q, x_q_k5) in
                 self.x.slice(nd::s![.., k5]).iter()
@@ -426,9 +435,9 @@ impl StabD {
                 if self.x[[i, k5]] & pw != 0 { self.row_mul(i + self.n, 2 * self.n); }
             }
             match (self.r[2 * self.n] != 0, postsel) {
-                (true,  Postsel::One ) => Some(self),
-                (false, Postsel::Zero) => Some(self),
-                _ => None,
+                (true,  Postsel::One ) => Ok(self),
+                (false, Postsel::Zero) => Ok(self),
+                _ => Err(self.into()),
             }
         }
     }
@@ -548,7 +557,7 @@ impl StabD {
     pub fn entanglement_entropy_single(&self, cut: Option<usize>) -> f32 {
         let mut j5 = 0;
         let mut pw = 0;
-        let cut = cut.unwrap_or(self.n / 2);
+        let cut = cut.unwrap_or(self.n / 2).min(self.n - 1);
         if cut <= self.n / 2 {
             let n
                 = self.x.axis_iter(nd::Axis(0))
@@ -719,6 +728,14 @@ impl StabD {
         }
         Some(StateD(acc))
     }
+}
+
+impl<const N: usize> From<Graph<N>> for StabD {
+    fn from(graph: Graph<N>) -> Self { graph.to_stabd() }
+}
+
+impl From<GraphD> for StabD {
+    fn from(graphd: GraphD) -> Self { graphd.to_stabd() }
 }
 
 /// A single `n`-qubit Pauli operator with a phase.
