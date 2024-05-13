@@ -23,6 +23,14 @@ name = "lib"
 path = "src/entropy_test.rs"
 name = "entropy_test"
 
+[[bin]]
+path = "src/convergence_test.rs"
+name = "convergence_test"
+
+[[bin]]
+path = "src/phase_transition.rs"
+name = "phase_transition"
+
 [profile.release]
 lto = true
 panic = "abort"

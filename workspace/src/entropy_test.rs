@@ -3,11 +3,11 @@ use clifford_sim::circuit::StabCircuit;
 use ndarray as nd;
 use whooie::{ mkdir, print_flush, write_npz };
 
-const N: usize = 512; // number of qubits
+const N: usize = 256; // number of qubits
 
 fn main() {
-    const MC: usize = 50;
-    const DEPTH: usize = 250;
+    const MC: usize = 20;
+    const DEPTH: usize = 1000;
     const P_MEAS: f32 = 0.08;
 
     let outdir = PathBuf::from("output");
@@ -24,6 +24,12 @@ fn main() {
 
     write_npz!(
         outdir.join("entropy_test.npz"),
-        arrays: { "entropy" => &s_acc }
+        arrays: {
+            "size" => &nd::array![N as u32],
+            "mc" => &nd::array![MC as u32],
+            "p_meas" => &nd::array![P_MEAS],
+            "entropy" => &s_acc,
+        }
     );
 }
+
