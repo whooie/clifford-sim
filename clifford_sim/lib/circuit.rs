@@ -46,6 +46,9 @@ impl StabCircuit {
         Self { state: Stab::new(n), outcomes: Vec::new(), p_meas, cut, n, rng }
     }
 
+    /// Return the number of qubits.
+    pub fn n(&self) -> usize { self.n }
+
     fn gates_simple(&mut self, cnot_offs: bool, buf: &mut Vec<Gate>) {
         (0..self.n).for_each(|k| {
             buf.push(Gate::sample_single(k, &mut self.rng));
@@ -201,23 +204,49 @@ impl StabCircuit {
     }
 }
 
-struct CNots {
+struct Pairs {
     iter: std::ops::Range<usize>
 }
 
-impl CNots {
+impl Pairs {
     fn new(offs: bool, stop: usize) -> Self {
         Self { iter: if offs { 1 } else { 0 } .. stop }
     }
+}
+
+impl Iterator for Pairs {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().zip(self.iter.next())
+    }
+}
+
+struct CNots(Pairs);
+
+impl CNots {
+    fn new(offs: bool, stop: usize) -> Self { Self(Pairs::new(offs, stop)) }
 }
 
 impl Iterator for CNots {
     type Item = Gate;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
-            .zip(self.iter.next())
-            .map(|(a, b)| Gate::CX(a, b))
+        self.0.next().map(|(a, b)| Gate::CX(a, b))
+    }
+}
+
+struct CZs(Pairs);
+
+impl CZs {
+    fn new(offs: bool, stop: usize) -> Self { Self(Pairs::new(offs, stop)) }
+}
+
+impl Iterator for CZs {
+    type Item = Gate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(a, b)| Gate::CZ(a, b))
     }
 }
 

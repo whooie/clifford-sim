@@ -22,7 +22,7 @@ use rand::Rng;
 use crate::tree::Qubit;
 
 /// The argument of a complex phase factor, limited to integer multiples of π/4.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Phase {
     /// 0
     Pi0,
@@ -153,7 +153,7 @@ impl Mul<Phase> for i8 {
 }
 
 /// Description of a single gate for a register of `N` qubits.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
     /// Hadamard
     H(usize),
@@ -216,7 +216,7 @@ impl Gate {
 }
 
 /// A single-qubit Pauli operator.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pauli {
     /// Identity
     I,
@@ -294,7 +294,7 @@ impl Pauli {
 /// All gates sourced from this type are guaranteed to apply to qubit indices
 /// less than or equal to `N` and all two-qubit gate indices are guaranteed to
 /// be non-equal.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clifford(Vec<Gate>, usize);
 
 impl IntoIterator for Clifford {
@@ -543,7 +543,7 @@ impl Tableau {
 }
 
 /// Specify the basis in which to perform a projective measurement.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Basis {
     /// X-basis
     X,

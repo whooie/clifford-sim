@@ -29,7 +29,7 @@ use std::{
     ops::DerefMut,
 };
 use itertools::Itertools;
-use ndarray as nd;
+use nalgebra as na;
 use num_complex::Complex64 as C64;
 use rustc_hash::FxHasher;
 use crate::gate::{ Gate, Basis, Phase };
@@ -167,19 +167,21 @@ impl<const N: usize> Register<N> {
     /// Represent `self` as a complex-valued 1D array in the *z*-basis.
     ///
     /// The length of this array is guaranteed to be `2^N`.
-    pub fn as_vector(&self) -> nd::Array1<C64> {
-        self.0.iter()
-            .map(|q| q.z_amps())
-            .multi_cartesian_product()
-            .map(|amps| amps.into_iter().product())
-            .collect()
+    pub fn as_vector(&self) -> na::DVector<C64> {
+        na::DVector::from_iterator(
+            2_usize.pow(N as u32),
+            self.0.iter()
+                .map(|q| q.z_amps())
+                .multi_cartesian_product()
+                .map(|amps| amps.into_iter().product()),
+        )
     }
 
     /// Represent `self` as a complex-valued 2D array in the *z*-basis.
     ///
     /// This array is guaranteed to be Hermitian and idempotent with shape `2^N
     /// × 2^N`.
-    pub fn as_matrix(&self) -> nd::Array2<C64> {
+    pub fn as_matrix(&self) -> na::DMatrix<C64> {
         let psi = self.as_vector();
         outer_prod(&psi, &psi)
     }
@@ -610,14 +612,14 @@ impl<const N: usize> Pure<N> {
     /// Represent `self` as a complex-valued 1D array in the *z*-basis.
     ///
     /// The length of this array is guaranteed to be `2^N`.
-    pub fn as_vector(&self) -> nd::Array1<C64> {
+    pub fn as_vector(&self) -> na::DVector<C64> {
         self.terms()
             .into_iter()
             .fold(
-                nd::Array1::zeros(2_usize.pow(N as u32)),
+                na::DVector::<C64>::zeros(2_usize.pow(N as u32)),
                 |acc, (reg, amp)| {
                     let mut v = reg.as_vector();
-                    v.mapv_inplace(|a| a * amp);
+                    v.iter_mut().for_each(|a| { *a *= amp; });
                     acc + v
                 }
             )
@@ -627,7 +629,7 @@ impl<const N: usize> Pure<N> {
     ///
     /// This array is guaranteed to be Hermitian and idempotent with shape `2^N
     /// × 2^N`.
-    pub fn as_matrix(&self) -> nd::Array2<C64> {
+    pub fn as_matrix(&self) -> na::DMatrix<C64> {
         let psi = self.as_vector();
         outer_prod(&psi, &psi)
     }
@@ -769,15 +771,15 @@ impl<const N: usize> State<N> {
     /// Represent `self` as a complex-valued 2D array in the *z*-basis.
     ///
     /// This array is guaranteed to be Hermitian with shape `2^N × 2^N`.
-    pub fn as_matrix(&self) -> nd::Array2<C64> {
+    pub fn as_matrix(&self) -> na::DMatrix<C64> {
         let n = 2_usize.pow(N as u32);
         self.terms()
             .into_iter()
             .fold(
-                nd::Array2::zeros((n, n)),
+                na::DMatrix::<C64>::zeros(n, n),
                 |acc, (pure, prob)| {
                     let mut r = pure.as_matrix();
-                    r.mapv_inplace(|a| a * prob);
+                    r.iter_mut().for_each(|a| { *a *= prob; });
                     acc + r
                 }
             )
@@ -786,22 +788,13 @@ impl<const N: usize> State<N> {
 
 /* Auxiliary structures *******************************************************/
 
-fn outer_prod<SA, SB>(
-    a: &nd::ArrayBase<SA, nd::Ix1>,
-    b: &nd::ArrayBase<SB, nd::Ix1>,
-) -> nd::Array2<C64>
-where
-    SA: nd::Data<Elem = C64>,
-    SB: nd::Data<Elem = C64>,
-{
+fn outer_prod(a: &na::DVector<C64>, b: &na::DVector<C64>) -> na::DMatrix<C64> {
     let na = a.len();
     let nb = b.len();
-    nd::Array2::from_shape_vec(
-        (na, nb),
+    na::DMatrix::from_iterator(
+        na, nb,
         a.iter().cartesian_product(b)
-            .map(|(ai, bj)| *ai * bj.conj())
-            .collect(),
+            .map(|(ai, bj)| *ai * bj.conj()),
     )
-    .unwrap()
 }
 

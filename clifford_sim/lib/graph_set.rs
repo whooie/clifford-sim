@@ -74,6 +74,8 @@
 //! [rohde]: https://peterrohde.org/an-introduction-to-graph-states/
 //! [vijayan]: https://arxiv.org/abs/2209.07345
 
+#![allow(unused_imports)]
+
 use std::{
     fmt,
     fs,
@@ -81,49 +83,108 @@ use std::{
     path::Path,
 };
 use itertools::Itertools;
-use ndarray as nd;
+use nalgebra as na;
+use rustc_hash::FxHashSet as HashSet;
 use crate:: {
     gate::{ Basis, Pauli, Phase },
-    stab::{ Stab, NPauli },
+    stab_na::{ Stab, NPauli },
 };
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Edge(pub usize, pub usize);
+
+impl From<(usize, usize)> for Edge {
+    fn from(ends: (usize, usize)) -> Self { Self(ends.0, ends.1) }
+}
+
+impl From<[usize; 2]> for Edge {
+    fn from(ends: [usize; 2]) -> Self { Self(ends[0], ends[1]) }
+}
+
+impl From<Edge> for (usize, usize) {
+    fn from(edge: Edge) -> Self { (edge.0, edge.1) }
+}
+
+impl From<Edge> for [usize; 2] {
+    fn from(edge: Edge) -> Self { [edge.0, edge.1] }
+}
+
+impl Edge {
+    /// Return `true` if either endpoint of the edge is `n`.
+    pub fn contains(self, n: usize) -> bool { n == self.0 || n == self.1 }
+
+    /// If `self` contains `n`, return the other endpoint of the edge.
+    pub fn get_other(self, n: usize) -> Option<usize> {
+        if self.0 == n {
+            Some(self.1)
+        } else if self.1 == n {
+            Some(self.0)
+        } else {
+            None
+        }
+    }
+
+    /// Return `self` with its endpoints swapped.
+    pub fn rev(self) -> Self { Self(self.1, self.0) }
+}
 
 /// A graph state of a collection of qubits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Graph {
     n: usize,
-    adj: nd::Array2<bool>,
+    nodes: HashSet<usize>,
+    edges: HashSet<Edge>,
 }
 
 impl Graph {
-    /// Create a new, totally disconnected graph state of `n` qubits.
+    /// Create a new, totally disconnected graph state of `n` qubits, indexed as
+    /// the integers `[0, n)`.
     pub fn new(n: usize) -> Self {
-        Self { n, adj: nd::Array2::from_elem((n, n), false) } }
+        Self { n, nodes: (0..n).collect(), edges: HashSet::default() }
+    }
 
     /// Return the number of qubits.
+    pub fn len(&self) -> usize { self.n }
+
+    /// Return `true` if `self` contains no qubits.
+    pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
+
+    /// Synonym for [`Self::len`].
     pub fn n(&self) -> usize { self.n }
 
     /// Return an iterator over the indices of all nodes that share an edge with
     /// a given source node.
     pub fn neighbors_of(&self, node: usize) -> Neighbors<'_> {
-        if node < self.n {
-            let iter
-                = self.adj.slice(nd::s![node, ..])
-                .into_iter()
-                .enumerate();
-            NeighborsData::Iter(iter).into()
-        } else {
-            NeighborsData::Empty.into()
-        }
+        Neighbors { n: node, iter: self.edges.iter() }
     }
 
-    fn neighbors_of_unchecked(&self, node: usize) -> Neighbors<'_> {
-        let iter = self.adj.slice(nd::s![node, ..]).into_iter().enumerate();
-        NeighborsData::Iter(iter).into()
+    /// Return `true` if `self` contains `node`.
+    pub fn has_node(&self, node: usize) -> bool { self.nodes.contains(&node) }
+
+    /// Return `true` if `self` contains `edge`.
+    pub fn has_edge<E>(&self, edge: E) -> bool
+    where E: Into<Edge>
+    {
+        let edge = edge.into();
+        self.edges.contains(&edge) || self.edges.contains(&edge.rev())
     }
+
+    /// Return an iterator over all node indices in the graph.
+    pub fn nodes(&self) -> Nodes<'_> { Nodes { iter: self.nodes.iter() } }
+
+    /// Return an iterator over all edges in the graph.
+    pub fn edges(&self) -> Edges<'_> { Edges { iter: self.edges.iter() } }
 
     fn toggle_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[[a, b]] ^= true;
-        self.adj[[b, a]] ^= true;
+        let edge = Edge::from((a, b));
+        let rev = edge.rev();
+        if self.edges.contains(&edge) {
+            self.edges.remove(&edge);
+        } else if self.edges.contains(&rev) {
+            self.edges.remove(&rev);
+        } else {
+            self.edges.insert(edge);
+        }
         self
     }
 
@@ -137,8 +198,7 @@ impl Graph {
     }
 
     fn add_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[[a, b]] = true;
-        self.adj[[b, a]] = true;
+        if !self.has_edge((a, b)) { self.edges.insert((a, b).into()); }
         self
     }
 
@@ -151,8 +211,8 @@ impl Graph {
     }
 
     fn remove_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[[a, b]] = false;
-        self.adj[[b, a]] = false;
+        let _ = self.edges.remove(&(a, b).into())
+            || self.edges.remove(&(b, a).into());
         self
     }
 
@@ -160,7 +220,7 @@ impl Graph {
     ///
     /// Does nothing if `a` and `b` are not connected.
     pub fn remove_edge(&mut self, a: usize, b: usize) -> &mut Self {
-        if a >= self.n || b >= self.n { return self; }
+        if a >= self.n || b >= self.n || a == b { return self; }
         self.remove_edge_unchecked(a, b)
     }
 
@@ -183,7 +243,7 @@ impl Graph {
     }
 
     fn local_complement_unchecked(&mut self, node: usize) -> &mut Self {
-        let neighbors: Vec<usize> = self.neighbors_of_unchecked(node).collect();
+        let neighbors: Vec<usize> = self.neighbors_of(node).collect();
         neighbors.iter()
             .cartesian_product(neighbors.iter())
             .filter(|(a, b)| a != b && a < b)
@@ -205,19 +265,11 @@ impl Graph {
         let npauli: NPauli
             = NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
         let mut stabs: Vec<NPauli> = vec![npauli.clone(); self.n];
-        let iter1
-            = self.adj.axis_iter(nd::Axis(0))
-            .zip(stabs.iter_mut())
-            .enumerate();
-        for (i, (row, stab)) in iter1 {
-            let iter2
-                = row.iter()
-                .zip(stab.ops.iter_mut())
-                .enumerate();
-            for (j, (col, pauli)) in iter2 {
+        for (i, stab) in stabs.iter_mut().enumerate() {
+            for (j, pauli) in stab.ops.iter_mut().enumerate() {
                 if i == j {
                     *pauli = Pauli::X;
-                } else if *col {
+                } else if self.has_edge((i, j)) {
                     *pauli = Pauli::Z;
                 } else {
                     *pauli = Pauli::I;
@@ -240,9 +292,7 @@ impl Graph {
             },
             Basis::X => {
                 let some_neighbor: Option<usize>
-                    = self.adj.slice(nd::s![node, ..]).iter()
-                    .enumerate()
-                    .find_map(|(k, a)| a.then_some(k));
+                    = self.neighbors_of(node).next();
                 if let Some(k) = some_neighbor {
                     self.local_complement_unchecked(k);
                     self.local_complement_unchecked(node);
@@ -266,27 +316,27 @@ impl Graph {
         // 3. the bottom-right block (rows N..2 * N of Z) should be the
         //    adjacency matrix of the graph
         let over32: usize = (self.n >> 5) + 1;
-        let mut x: nd::Array2<u32>
-            = nd::Array2::zeros((2 * self.n + 1, over32));
-        let mut z: nd::Array2<u32>
-            = nd::Array2::zeros((2 * self.n + 1, over32));
-        let r: nd::Array1<u8> = nd::Array1::zeros(2 * self.n + 1);
+        let mut x: na::DMatrix<u32>
+            = na::DMatrix::zeros(2 * self.n + 1, over32);
+        let mut z: na::DMatrix<u32>
+            = na::DMatrix::zeros(2 * self.n + 1, over32);
+        let r: na::DVector<u8> = na::DVector::zeros(2 * self.n + 1);
         for (i, mut xi) in
-            x.axis_iter_mut(nd::Axis(0)).skip(self.n).take(self.n).enumerate()
+            x.row_iter_mut().skip(self.n).take(self.n).enumerate()
         {
             xi[i >> 5] = 1 << (i & 31);
         }
         for (i, mut zi) in
-            z.axis_iter_mut(nd::Axis(0)).take(self.n).enumerate()
+            z.row_iter_mut().take(self.n).enumerate()
         {
             zi[i >> 5] = 1 << (i & 31);
         }
         let mut j5: usize;
-        for ((i, j), adjij) in self.adj.indexed_iter() {
-            if *adjij {
-                j5 = j >> 5;
-                z[[i, j5]] ^= 1 << (j & 31);
-            }
+        for Edge(a, b) in self.edges() {
+            j5 = b >> 5;
+            z[(a, j5)] ^= 1 << (b & 31);
+            j5 = a >> 5;
+            z[(b, j5)] ^= 1 << (a & 31);
         }
         Stab { n: self.n, x, z, r, over32 }
     }
@@ -302,18 +352,18 @@ impl Graph {
             j5 = j >> 5;
             pw = 1 << (j & 31);
             all_zeros
-                = stab.x.slice(nd::s![.., j5]).iter()
+                = stab.x.column(j5).iter()
                 .skip(stab.n)
                 .all(|xij| xij & pw == 0);
             if all_zeros { stab.apply_h(j); }
             for i in stab.n + j + 1..2 * stab.n {
-                if stab.x[[i, j5]] & pw != 0 {
+                if stab.x[(i, j5)] & pw != 0 {
                     stab.row_swap(i, j);
                     break;
                 }
             }
             for i in stab.n + j + 1..2 * stab.n {
-                if stab.x[[i, j5]] & pw != 0 { stab.row_mul(i, j); }
+                if stab.x[(i, j5)] & pw != 0 { stab.row_mul(i, j); }
             }
         }
         // diagonalize the X block (O(N^3))
@@ -321,34 +371,30 @@ impl Graph {
             for j in (i + 1 - stab.n..stab.n).rev() {
                 j5 = j >> 5;
                 pw = 1 << (j & 31);
-                if stab.x[[i, j5]] & pw == 0 { stab.row_mul(j, i); }
+                if stab.x[(i, j5)] & pw == 0 { stab.row_mul(j, i); }
             }
         }
         // make Z block diagonal zero and correct phases (O(N))
         for i in stab.n..2 * stab.n {
             j5 = i >> 5;
             pw = 1 << (i & 31);
-            if stab.z[[i, j5]] & pw != 0 {
+            if stab.z[(i, j5)] & pw != 0 {
                 stab.apply_s(i).apply_s(i).apply_s(i); // phase gate inverse
             }
             if stab.r[i] % 4 == 2 {
                 stab.apply_z(i);
             }
         }
-        // convert to boolean adjacency matrix
-        let mut adj: nd::Array2<bool>
-            = nd::Array2::from_elem((stab.n, stab.n), false);
-        let iter
-            = stab.z.axis_iter(nd::Axis(0)).skip(stab.n)
-            .zip(adj.axis_iter_mut(nd::Axis(0)));
-        for (zi, mut adji) in iter {
-            for (j, adjij) in adji.iter_mut().enumerate() {
+        // add edges
+        let mut graph = Self::new(stab.n);
+        for (i, zi) in stab.z.row_iter().skip(stab.n).enumerate() {
+            for j in 0..stab.n {
                 j5 = j >> 5;
                 pw = 1 << (j & 31);
-                *adjij = zi[j5] & pw != 0;
+                if zi[j5] & pw != 0 { graph.add_edge_unchecked(i, j); }
             }
         }
-        Self { n: stab.n, adj }
+        graph
     }
 
     /// Return an object containing an encoding of `self` in the [dot
@@ -395,14 +441,12 @@ impl Graph {
             statements = statements.add_node(k.into(), None, Some(attrs));
         }
         // add edges
-        for ((i, j), a) in self.adj.indexed_iter() {
-            if *a && j < i {
-                statements
-                    = statements.add_edge(
-                        Edge::head_node(i.into(), None)
-                            .line_to_node(j.into(), None)
-                    );
-            }
+        for Edge(a, b) in self.edges() {
+            statements
+                = statements.add_edge(
+                    Edge::head_node(a.into(), None)
+                        .line_to_node(b.into(), None)
+                );
         }
         GraphBuilder::default()
             .graph_type(GraphType::Graph)
@@ -435,31 +479,49 @@ impl From<Stab> for Graph {
     fn from(stab: Stab) -> Self { Self::from_stab(stab) }
 }
 
-#[derive(Clone)]
+/// Iterator over the neighbors of a node in a [`Graph`].
+///
+/// The iterator item type is `usize`.
+#[derive(Clone, Debug)]
 pub struct Neighbors<'a> {
-    data: NeighborsData<'a>,
-}
-
-#[derive(Clone)]
-enum NeighborsData<'a> {
-    Empty,
-    Iter(std::iter::Enumerate<<nd::ArrayView1<'a, bool> as IntoIterator>::IntoIter>),
-}
-
-impl<'a> From<NeighborsData<'a>> for Neighbors<'a> {
-    fn from(data: NeighborsData<'a>) -> Self { Self { data } }
+    n: usize,
+    iter: std::collections::hash_set::Iter<'a, Edge>,
 }
 
 impl<'a> Iterator for Neighbors<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.data {
-            NeighborsData::Empty => None,
-            NeighborsData::Iter(ref mut iter)
-                => iter.find_map(|(k, bk)| bk.then_some(k)),
-        }
+        self.iter.find_map(|e| e.get_other(self.n))
     }
+}
+
+/// Iterator over the nodes in a [`Graph`].
+///
+/// The iterator item type is `usize`.
+#[derive(Clone, Debug)]
+pub struct Nodes<'a> {
+    iter: std::collections::hash_set::Iter<'a, usize>,
+}
+
+impl<'a> Iterator for Nodes<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> { self.iter.next().copied() }
+}
+
+/// Iterator over the edges in a [`Graph`].
+///
+/// The iterator item type is [`Edge`].
+#[derive(Clone, Debug)]
+pub struct Edges<'a> {
+    iter: std::collections::hash_set::Iter<'a, Edge>,
+}
+
+impl<'a> Iterator for Edges<'a> {
+    type Item = Edge;
+
+    fn next(&mut self) -> Option<Self::Item> { self.iter.next().copied() }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

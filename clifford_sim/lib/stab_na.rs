@@ -69,12 +69,14 @@
 //! [entropy1]: https://arxiv.org/abs/1901.08092
 //! [entropy2]: https://arxiv.org/abs/1608.09650
 
+#![allow(unused_imports)]
+
 use std::fmt;
-use ndarray::{ self as nd, s };
+use nalgebra as na;
 use rand::Rng;
 use crate::{
     gate::{ Gate, Pauli, Phase },
-    graph::Graph,
+    graph_set::Graph,
 };
 
 const PW: [u32; 32] = [ // PW[i] = 2^i
@@ -90,9 +92,9 @@ pub struct Stab {
     pub(crate) n: usize,
     // `x` and `z` are bit arrays of size (2n + 1) × n; for space efficiency,
     // the columns are packed into u32s
-    pub(crate) x: nd::Array2<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
-    pub(crate) z: nd::Array2<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
-    pub(crate) r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
+    pub(crate) x: na::DMatrix<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) z: na::DMatrix<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) r: na::DVector<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
     pub(crate) over32: usize, // = floor(N / 8) + 1
 }
 
@@ -100,56 +102,23 @@ impl Stab {
     /// Create a new stabilizer state of size `n` initialized to ∣0...0⟩.
     pub fn new(n: usize) -> Self {
         let over32: usize = (n >> 5) + 1;
-        let x: nd::Array2<u32> = nd::Array2::zeros((2 * n + 1, over32));
-        let z: nd::Array2<u32> = nd::Array2::zeros((2 * n + 1, over32));
-        let r: nd::Array1<u8> = nd::Array1::zeros(2 * n + 1);
-        let mut q = Self { n, x, z, r, over32 };
+        let mut x: na::DMatrix<u32> = na::DMatrix::zeros(2 * n + 1, over32);
+        let mut z: na::DMatrix<u32> = na::DMatrix::zeros(2 * n + 1, over32);
+        let r: na::DVector<u8> = na::DVector::zeros(2 * n + 1);
         let mut j: usize;
-        for (i, ((mut xi, mut zi), _)) in q.row_iter_mut().enumerate() {
+        let iter
+            = x.row_iter_mut().take(n)
+            .chain(z.row_iter_mut().skip(n).take(n))
+            .enumerate();
+        for (i, mut row) in iter {
             if i < n {
-                xi[i >> 5] = PW[i & 31];
-            } else if i < 2 * n {
+                row[i >> 5] = PW[i & 31];
+            } else {
                 j = i - n;
-                zi[j >> 5] = PW[j & 31];
+                row[j >> 5] = PW[j & 31];
             }
         }
-        q
-    }
-
-    pub(crate) fn row_iter(&self)
-        -> impl Iterator<
-            Item = ((nd::ArrayView1<u32>, nd::ArrayView1<u32>), nd::ArrayView0<u8>)
-        >
-    {
-        self.x.axis_iter(nd::Axis(0))
-            .zip(self.z.axis_iter(nd::Axis(0)))
-            .zip(self.r.axis_iter(nd::Axis(0)))
-            .take(2 * self.n)
-    }
-
-    pub(crate) fn row_iter_mut(&mut self)
-        -> impl Iterator<
-            Item = ((nd::ArrayViewMut1<u32>, nd::ArrayViewMut1<u32>), nd::ArrayViewMut0<u8>)
-        >
-    {
-        self.x.axis_iter_mut(nd::Axis(0))
-            .zip(self.z.axis_iter_mut(nd::Axis(0)))
-            .zip(self.r.axis_iter_mut(nd::Axis(0)))
-            .take(2 * self.n)
-    }
-
-    pub(crate) fn col_iter(&self)
-        -> impl Iterator<Item = (nd::ArrayView1<u32>, nd::ArrayView1<u32>)>
-    {
-        self.x.axis_iter(nd::Axis(1))
-            .zip(self.z.axis_iter(nd::Axis(1)))
-    }
-
-    pub(crate) fn col_iter_mut(&mut self)
-        -> impl Iterator<Item = (nd::ArrayViewMut1<u32>, nd::ArrayViewMut1<u32>)>
-    {
-        self.x.axis_iter_mut(nd::Axis(1))
-            .zip(self.z.axis_iter_mut(nd::Axis(1)))
+        Self { n, x, z, r, over32 }
     }
 
     /// Apply a Hadamard gate to the `k`-th qubit.
@@ -163,8 +132,8 @@ impl Stab {
         let pw: u32 = PW[k & 31];
         let mut tmp: u32;
         for ((x_i_k5, z_i_k5), r_i) in
-            self.x.slice_mut(s![.., k5]).iter_mut()
-                .zip(self.z.slice_mut(s![.., k5]).iter_mut())
+            self.x.column_mut(k5).iter_mut()
+                .zip(self.z.column_mut(k5).iter_mut())
                 .zip(self.r.iter_mut())
                 .take(2 * self.n)
         {
@@ -186,8 +155,8 @@ impl Stab {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
         for ((x_i_k5, z_i_k5), r_i) in
-            self.x.slice_mut(s![.., k5]).iter_mut()
-                .zip(self.z.slice_mut(s![.., k5]).iter_mut())
+            self.x.column_mut(k5).iter_mut()
+                .zip(self.z.column_mut(k5).iter_mut())
                 .zip(self.r.iter_mut())
                 .take(2 * self.n)
         {
@@ -197,14 +166,23 @@ impl Stab {
         self
     }
 
-    /// Apply an X gate to the `k`-th qubit.
+    /// Apply X gate to the `k`-th qubit.
     pub fn apply_x(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_x_unchecked(k)
     }
 
     fn apply_x_unchecked(&mut self, k: usize) -> &mut Self {
-        self.apply_h_unchecked(k).apply_z_unchecked(k).apply_h_unchecked(k)
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        for (z_i_k5, r_i) in
+            self.z.column_mut(k5).iter()
+                .zip(self.r.iter_mut())
+                .take(2 * self.n)
+        {
+            if *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
+        }
+        self
     }
 
     /// Apply an Y gate to the `k`-th qubit.
@@ -214,10 +192,19 @@ impl Stab {
     }
 
     fn apply_y_unchecked(&mut self, k: usize) -> &mut Self {
-        self.apply_s_unchecked(k)
-            .apply_x_unchecked(k)
-            .apply_z_unchecked(k)
-            .apply_s_unchecked(k)
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        for ((x_i_k5, z_i_k5), r_i) in
+            self.x.column(k5).iter()
+                .zip(self.z.column(k5).iter())
+                .zip(self.r.iter_mut())
+                .take(2 * self.n)
+        {
+            if (*z_i_k5 & pw != 0 && *x_i_k5 & pw == 0)
+                || (*z_i_k5 & pw == 0 && *x_i_k5 & pw != 0)
+            { *r_i = (*r_i + 2) % 4; }
+        }
+        self
     }
 
     /// Apply an Z gate to the `k`-th qubit.
@@ -227,7 +214,16 @@ impl Stab {
     }
 
     fn apply_z_unchecked(&mut self, k: usize) -> &mut Self {
-        self.apply_s_unchecked(k).apply_s_unchecked(k)
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        for (x_i_k5, r_i) in
+            self.x.column_mut(k5).iter()
+                .zip(self.r.iter_mut())
+                .take(2 * self.n)
+        {
+            if *x_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
+        }
+        self
     }
 
     /// Apply a CNOT gate to the `b`-th qubit, with the `a`-th qubit as control.
@@ -242,8 +238,8 @@ impl Stab {
         let pwa: u32 = PW[a & 31];
         let pwb: u32 = PW[b & 31];
         for ((mut x_i, mut z_i), r_i) in
-            self.x.axis_iter_mut(nd::Axis(0))
-                .zip(self.z.axis_iter_mut(nd::Axis(0)))
+            self.x.row_iter_mut()
+                .zip(self.z.row_iter_mut())
                 .zip(self.r.iter_mut())
                 .take(2 * self.n)
         {
@@ -266,9 +262,33 @@ impl Stab {
     }
 
     fn apply_cz_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.apply_h_unchecked(b)
-            .apply_cnot_unchecked(a, b)
-            .apply_h_unchecked(b)
+        let a5: usize = a >> 5;
+        let b5: usize = b >> 5;
+        let pwa: u32 = PW[a & 31];
+        let pwb: u32 = PW[b & 31];
+        for ((x_i, mut z_i), r_i) in
+            self.x.row_iter()
+                .zip(self.z.row_iter_mut())
+                .zip(self.r.iter_mut())
+                .take(2 * self.n)
+        {
+            if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
+            { *r_i = (*r_i + 2) % 4; }
+
+            if x_i[a5] & pwa != 0 { z_i[b5] ^= pwb; }
+            if x_i[b5] & pwb != 0 { z_i[a5] ^= pwa; }
+
+            if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
+                && z_i[b5] & pwb != 0 && z_i[a5] & pwa != 0
+            { *r_i = (*r_i + 2) % 4; }
+            if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
+                && z_i[b5] & pwb == 0 && z_i[a5] & pwa == 0
+            { *r_i = (*r_i + 2) % 4; }
+
+            if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
+            { *r_i = (*r_i + 2) % 4; }
+        }
+        self
     }
 
     /// Apply a SWAP gate to the `a`-th and `b`-th qubits.
@@ -278,9 +298,23 @@ impl Stab {
     }
 
     fn apply_swap_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.apply_cnot_unchecked(a, b)
-            .apply_cnot_unchecked(b, a)
-            .apply_cnot_unchecked(a, b)
+        let a5: usize = a >> 5;
+        let b5: usize = b >> 5;
+        let pwa: u32 = PW[a & 31];
+        let pwb: u32 = PW[b & 31];
+        let mut tmp: u32;
+        for (mut x_i, mut z_i) in
+            self.x.row_iter_mut()
+                .zip(self.z.row_iter_mut())
+        {
+            tmp = x_i[a5];
+            x_i[a5] ^= (x_i[a5] & pwa) ^ (x_i[b5] & pwb);
+            x_i[b5] ^= (x_i[b5] & pwb) ^ (tmp & pwa);
+            tmp = z_i[a5];
+            z_i[a5] ^= (z_i[a5] & pwa) ^ (z_i[b5] & pwb);
+            z_i[b5] ^= (z_i[b5] & pwb) ^ (tmp & pwa);
+        }
+        self
     }
 
     /// Perform the action of a gate.
@@ -314,8 +348,8 @@ impl Stab {
     pub(crate) fn row_copy(&mut self, a: usize, b: usize) -> &mut Self {
         // set row b equal to row a
         for (mut x__j, mut z__j) in
-            self.x.axis_iter_mut(nd::Axis(1))
-                .zip(self.z.axis_iter_mut(nd::Axis(1)))
+            self.x.column_iter_mut()
+                .zip(self.z.column_iter_mut())
         {
             x__j[b] = x__j[a];
             z__j[b] = z__j[a];
@@ -324,42 +358,43 @@ impl Stab {
         self
     }
 
+    // swap rows a and b
     pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
         let n = self.n;
-        // swap rows a and b
         self.row_copy(b, 2 * n)
             .row_copy(a, b)
             .row_copy(2 * n, a)
     }
 
-    // set row k equal to the o-th observable (X_1, ... X_n, Z_1, ..., Z_n)
+    // set row k equal to the o-th observable (X_1, ..., X_n, Z_1, ..., Z_n)
     pub(crate) fn row_set(&mut self, o: usize, k: usize) -> &mut Self {
         let o5: usize;
         let o31: usize;
-        self.x.slice_mut(nd::s![k, ..]).fill(0);
-        self.z.slice_mut(nd::s![k, ..]).fill(0);
+        self.x.fill_row(k, 0);
+        self.z.fill_row(k, 0);
         self.r[k] = 0;
         if o < self.n {
             o5 = o >> 5;
             o31 = o & 31;
-            self.x[[k, o5]] = PW[o31];
+            self.x[(k, o5)] = PW[o31];
         } else {
             o5 = (o - self.n) >> 5;
             o31 = (o - self.n) & 31;
-            self.z[[k, o5]] = PW[o31];
+            self.z[(k, o5)] = PW[o31];
         }
         self
     }
 
-    // return the phase (0, ..., 3) when row b is left-multiplied by row a
+    // return the phase (0, ..., 3) when row b's operator is left-multiplied by
+    // row a's operator
     pub(crate) fn row_mul_phase(&self, a: usize, b: usize) -> u8 {
         let mut e: i32 = 0;
-        let xa = self.x.slice(nd::s![a, ..]);
-        let xb = self.x.slice(nd::s![b, ..]);
-        let za = self.z.slice(nd::s![a, ..]);
-        let zb = self.z.slice(nd::s![b, ..]);
+        let xa = self.x.row(a);
+        let xb = self.x.row(b);
+        let za = self.z.row(a);
+        let zb = self.z.row(b);
         for ((&xaj, &xbj), (&zaj, &zbj)) in
-            xa.iter().zip(xb).zip(za.iter().zip(zb))
+            xa.iter().zip(xb.iter()).zip(za.iter().zip(zb.iter()))
         {
             for &pw in PW.iter() {
                 if xaj & pw != 0 && zaj & pw == 0 {
@@ -380,12 +415,13 @@ impl Stab {
         e as u8
     }
 
-    // left-multiply row b by row a
+    // left-multiply row b's operator by row a's operator and store the result
+    // in row b
     pub(crate) fn row_mul(&mut self, a: usize, b: usize) -> &mut Self {
         self.r[b] = self.row_mul_phase(a, b);
         for (mut x__j, mut z__j) in
-            self.x.axis_iter_mut(nd::Axis(1))
-                .zip(self.z.axis_iter_mut(nd::Axis(1)))
+            self.x.column_iter_mut()
+                .zip(self.z.column_iter_mut())
         {
             x__j[b] ^= x__j[a];
             z__j[b] ^= z__j[a];
@@ -409,7 +445,7 @@ impl Stab {
         let mut m: usize = 0;
 
         for (q, x_qpN_k5) in
-            self.x.slice(nd::s![.., k5]).iter()
+            self.x.column(k5).iter()
                 .take(2 * self.n)
                 .skip(self.n)
                 .enumerate()
@@ -423,7 +459,7 @@ impl Stab {
             self.row_set(k + self.n, p + self.n);
             self.r[p + self.n] = 2 * u8::from(rng.gen::<bool>());
             for i in 0..2 * self.n {
-                if i != p && self.x[[i, k5]] & pw != 0 { self.row_mul(p, i); }
+                if i != p && self.x[(i, k5)] & pw != 0 { self.row_mul(p, i); }
             }
             if self.r[p + self.n] != 0 {
                 Outcome::Rand1
@@ -432,7 +468,7 @@ impl Stab {
             }
         } else {
             for (q, x_q_k5) in
-                self.x.slice(nd::s![.., k5]).iter()
+                self.x.column(k5).iter()
                     .take(self.n)
                     .enumerate()
             {
@@ -440,7 +476,9 @@ impl Stab {
             }
             self.row_copy(m + self.n, 2 * self.n);
             for i in m + 1..self.n {
-                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + self.n, 2 * self.n); }
+                if self.x[(i, k5)] & pw != 0 {
+                    self.row_mul(i + self.n, 2 * self.n);
+                }
             }
             if self.r[2 * self.n] != 0 {
                 Outcome::Det1
@@ -467,7 +505,7 @@ impl Stab {
         let mut m: usize = 0;
 
         for (q, x_qpN_k5) in
-            self.x.slice(nd::s![.., k5]).iter()
+            self.x.column(k5).iter()
                 .take(2 * self.n)
                 .skip(self.n)
                 .enumerate()
@@ -481,12 +519,12 @@ impl Stab {
             self.row_set(k + self.n, p + self.n);
             self.r[p + self.n] = 2 * postsel as u8;
             for i in 0..2 * self.n {
-                if i != p && self.x[[i, k5]] & pw != 0 { self.row_mul(p, i); }
+                if i != p && self.x[(i, k5)] & pw != 0 { self.row_mul(p, i); }
             }
             Ok(self)
         } else {
             for (q, x_q_k5) in
-                self.x.slice(nd::s![.., k5]).iter()
+                self.x.column(k5).iter()
                     .take(self.n)
                     .enumerate()
             {
@@ -494,7 +532,9 @@ impl Stab {
             }
             self.row_copy(m + self.n, 2 * self.n);
             for i in m + 1..self.n {
-                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + self.n, 2 * self.n); }
+                if self.x[(i, k5)] & pw != 0 {
+                    self.row_mul(i + self.n, 2 * self.n);
+                }
             }
             match (self.r[2 * self.n] != 0, postsel) {
                 (true,  Postsel::One ) => Ok(self),
@@ -514,11 +554,14 @@ impl Stab {
         let mut stab: Vec<NPauli> = vec![npauli.clone(); self.n];
         let mut destab: Vec<NPauli> = vec![npauli.clone(); self.n];
         let iter
-            = self.row_iter()
+            = self.x.row_iter()
+            .zip(self.z.row_iter())
+            .zip(self.r.iter())
+            .take(2 * self.n)
             .zip(destab.iter_mut().chain(stab.iter_mut()));
         for (((xi, zi), ri), g) in iter {
             npauli.phase
-                = match ri[()] {
+                = match ri {
                     0 => Phase::Pi0,
                     1 => Phase::Pi1h,
                     2 => Phase::Pi3h,
@@ -537,63 +580,63 @@ impl Stab {
         StabGroup { stab, destab }
     }
 
-    /// Convert `self` to a bare tableau representation of only the stabilizer
-    /// group.
-    ///
-    /// Here, the "tableau" representation is an `N × 2N` binary matrix with an
-    /// extra vector of length `N` specifying the phase of each stabilizer as
-    /// a power on *i* (that is, the phase of the `i`-th stabilizer is given by
-    /// *i* raised to the value of the `i`-th element of the vector). For `0 ≤
-    /// i, j < N`, the `i`-th row is the `i`-th element of the stabilizer group
-    /// while the `j`-th and `N + j`-th columns identify the Pauli operator
-    /// acting on the `j`-th qubit. For tableau `T`,
-    ///
-    /// | <code>T[_, j]</code> | <code>T[_, N + j]</code> | Pauli |
-    /// | :------------------: | :----------------------: | :---: |
-    /// | 0                    | 0                        | *I*   |
-    /// | 1                    | 0                        | *X*   |
-    /// | 1                    | 1                        | *Y*   |
-    /// | 0                    | 1                        | *Z*   |
-    pub fn as_tableau(&self) -> (nd::Array2<u8>, nd::Array1<u8>) {
-        let mut j5: usize;
-        let mut pw: u32;
-        let mut tab: nd::Array2<u8> = nd::Array2::zeros((self.n, 2 * self.n));
-        let ph: nd::Array1<u8> = self.r.slice(nd::s![..self.n]).to_owned();
-        for ((xi, zi), mut ti) in
-            self.x.axis_iter(nd::Axis(0))
-            .zip(self.z.axis_iter(nd::Axis(0)))
-            .zip(tab.axis_iter_mut(nd::Axis(0)))
-        {
-            for j in 0..self.n {
-                j5 = j >> 5;
-                pw = PW[j & 31];
-                ti[j] = (xi[j5] & pw).try_into().unwrap();
-                ti[self.n + j] = (zi[j5] & pw).try_into().unwrap();
-            }
-        }
-        (tab, ph)
-    }
-
-    // like `as_tableau`, but outputting f32s for entanglement entropy
-    // calculations via matrix rank via SV, and without the phases
-    fn as_tableau_f32(&self) -> nd::Array2<f32> {
-        let mut j5: usize;
-        let mut pw: u32;
-        let mut tab: nd::Array2<f32> = nd::Array2::zeros((self.n, 2 * self.n));
-        for ((xi, zi), mut ti) in
-            self.x.axis_iter(nd::Axis(0))
-            .zip(self.z.axis_iter(nd::Axis(0)))
-            .zip(tab.axis_iter_mut(nd::Axis(0)))
-        {
-            for j in 0..self.n {
-                j5 = j >> 5;
-                pw = PW[j & 31];
-                ti[j] = (xi[j5] & pw) as f32;
-                ti[self.n + j] = (zi[j5] & pw) as f32;
-            }
-        }
-        tab
-    }
+    // /// Convert `self` to a bare tableau representation of only the stabilizer
+    // /// group.
+    // ///
+    // /// Here, the "tableau" representation is an `N × 2N` binary matrix with an
+    // /// extra vector of length `N` specifying the phase of each stabilizer as
+    // /// a power on *i* (that is, the phase of the `i`-th stabilizer is given by
+    // /// *i* raised to the value of the `i`-th element of the vector). For `0 ≤
+    // /// i, j < N`, the `i`-th row is the `i`-th element of the stabilizer group
+    // /// while the `j`-th and `N + j`-th columns identify the Pauli operator
+    // /// acting on the `j`-th qubit. For tableau `T`,
+    // ///
+    // /// | <code>T[_, j]</code> | <code>T[_, N + j]</code> | Pauli |
+    // /// | :------------------: | :----------------------: | :---: |
+    // /// | 0                    | 0                        | *I*   |
+    // /// | 1                    | 0                        | *X*   |
+    // /// | 1                    | 1                        | *Y*   |
+    // /// | 0                    | 1                        | *Z*   |
+    // pub fn as_tableau(&self) -> (nd::Array2<u8>, nd::Array1<u8>) {
+    //     let mut j5: usize;
+    //     let mut pw: u32;
+    //     let mut tab: nd::Array2<u8> = nd::Array2::zeros((self.n, 2 * self.n));
+    //     let ph: nd::Array1<u8> = self.r.slice(nd::s![..self.n]).to_owned();
+    //     for ((xi, zi), mut ti) in
+    //         self.x.axis_iter(nd::Axis(0))
+    //         .zip(self.z.axis_iter(nd::Axis(0)))
+    //         .zip(tab.axis_iter_mut(nd::Axis(0)))
+    //     {
+    //         for j in 0..self.n {
+    //             j5 = j >> 5;
+    //             pw = PW[j & 31];
+    //             ti[j] = (xi[j5] & pw).try_into().unwrap();
+    //             ti[self.n + j] = (zi[j5] & pw).try_into().unwrap();
+    //         }
+    //     }
+    //     (tab, ph)
+    // }
+    //
+    // // like `as_tableau`, but outputting f32s for entanglement entropy
+    // // calculations via matrix rank via SV, and without the phases
+    // fn as_tableau_f32(&self) -> nd::Array2<f32> {
+    //     let mut j5: usize;
+    //     let mut pw: u32;
+    //     let mut tab: nd::Array2<f32> = nd::Array2::zeros((self.n, 2 * self.n));
+    //     for ((xi, zi), mut ti) in
+    //         self.x.axis_iter(nd::Axis(0))
+    //         .zip(self.z.axis_iter(nd::Axis(0)))
+    //         .zip(tab.axis_iter_mut(nd::Axis(0)))
+    //     {
+    //         for j in 0..self.n {
+    //             j5 = j >> 5;
+    //             pw = PW[j & 31];
+    //             ti[j] = (xi[j5] & pw) as f32;
+    //             ti[self.n + j] = (zi[j5] & pw) as f32;
+    //         }
+    //     }
+    //     tab
+    // }
 
     /// Calculate the entanglement entropy of the state as the average over all
     /// bipartitions.
@@ -607,7 +650,8 @@ impl Stab {
     pub fn entanglement_entropy(&self) -> f32 {
         (1..self.n - 1)
             .map(|cut| {
-                self.entanglement_entropy_single(Some(cut)) / (self.n - 1) as f32
+                self.entanglement_entropy_single(Some(cut))
+                    / (self.n - 1) as f32
             })
             .sum()
     }
@@ -622,8 +666,8 @@ impl Stab {
         let cut = cut.unwrap_or(self.n / 2).min(self.n - 1);
         if cut <= self.n / 2 {
             let n
-                = self.x.axis_iter(nd::Axis(0))
-                .zip(self.z.axis_iter(nd::Axis(0)))
+                = self.x.row_iter()
+                .zip(self.z.row_iter())
                 .take(self.n)
                 .filter(|(xi, zi)| {
                     (0..cut).all(|j| {
@@ -636,8 +680,8 @@ impl Stab {
             (self.n - cut) as f32 - n
         } else {
             let n
-                = self.x.axis_iter(nd::Axis(0))
-                .zip(self.z.axis_iter(nd::Axis(0)))
+                = self.x.row_iter()
+                .zip(self.z.row_iter())
                 .take(self.n)
                 .filter(|(xi, zi)| {
                     (cut..self.n).all(|j| {
@@ -668,13 +712,13 @@ impl Stab {
         for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            maybe_k = (i..2 * self.n).find(|q| self.x[[*q, j5]] & pw != 0);
+            maybe_k = (i..2 * self.n).find(|q| self.x[(*q, j5)] & pw != 0);
             if let Some(k) = maybe_k {
                 if k < 2 * self.n {
                     self.row_swap(k, i);
                     self.row_swap(k - self.n, i - self.n);
                     for k2 in i + 1..2 * self.n {
-                        if self.x[[k2, j5]] & pw != 0 {
+                        if self.x[(k2, j5)] & pw != 0 {
                             self.row_mul(i, k2);
                             self.row_mul(k2 - self.n, i - self.n);
                         }
@@ -687,13 +731,13 @@ impl Stab {
         for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            maybe_k = (i..2 * self.n).find(|q| self.z[[*q, j5]] & pw != 0);
+            maybe_k = (i..2 * self.n).find(|q| self.z[(*q, j5)] & pw != 0);
             if let Some(k) = maybe_k {
                 if k < 2 * self.n {
                     self.row_swap(k, i);
                     self.row_swap(k - self.n, i - self.n);
                     for k2 in i + 1..2 * self.n {
-                        if self.z[[k2, j5]] & pw != 0 {
+                        if self.z[(k2, j5)] & pw != 0 {
                             self.row_mul(i, k2);
                             self.row_mul(k2 - self.n, i - self.n);
                         }
@@ -712,8 +756,8 @@ impl Stab {
     // should be provided as argument)
     fn seed_scratch(&mut self, g: usize) {
         self.r[2 * self.n] = 0;
-        self.x.slice_mut(nd::s![2 * self.n, ..]).fill(0);
-        self.z.slice_mut(nd::s![2 * self.n, ..]).fill(0);
+        self.x.fill_row(2 * self.n, 0);
+        self.z.fill_row(2 * self.n, 0);
 
         let mut f: u8;
         let mut j5: usize;
@@ -724,15 +768,15 @@ impl Stab {
             for j in (0..self.n).rev() {
                 j5 = j >> 5;
                 pw = PW[j & 31];
-                if self.z[[i, j5]] & pw != 0 {
+                if self.z[(i, j5)] & pw != 0 {
                     min = j;
-                    if self.x[[2 * self.n, j5]] & pw != 0 { f = (f + 2) % 4; }
+                    if self.x[(2 * self.n, j5)] & pw != 0 { f = (f + 2) % 4; }
                 }
             }
             if f % 4 == 2 {
                 j5 = min >> 5;
                 pw = PW[min & 31];
-                self.x[[2 * self.n, j5]] ^= pw;
+                self.x[(2 * self.n, j5)] ^= pw;
             }
         }
     }
@@ -747,7 +791,9 @@ impl Stab {
         for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            if self.x[[2 * self.n, j5]] & pw != 0 && self.z[[2 * self.n, j5]] & pw != 0 {
+            if self.x[(2 * self.n, j5)] & pw != 0
+                && self.z[(2 * self.n, j5)] & pw != 0
+            {
                 e = (e + 1) % 4;
             }
         }
@@ -763,7 +809,7 @@ impl Stab {
         for (j, b) in state.iter_mut().enumerate() {
             j5 = j >> 5;
             pw = PW[j & 31];
-            if self.x[[2 * self.n, j5]] & pw != 0 { *b = Qubit::One; }
+            if self.x[(2 * self.n, j5)] & pw != 0 { *b = Qubit::One; }
         }
         BasisState { phase, state }
     }
@@ -915,5 +961,4 @@ impl fmt::Display for State {
         Ok(())
     }
 }
-
 
