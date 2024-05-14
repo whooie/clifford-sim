@@ -17,7 +17,7 @@ fn main() {
     for k in 0..MC {
         print_flush!("\r {} ", k);
         let mut circuit = StabCircuit::new(N, P_MEAS, None, None);
-        s_acc += &nd::Array1::from(circuit.run_simple(DEPTH, false));
+        s_acc += &nd::Array1::from(circuit.run_simple(DEPTH, None));
     }
     s_acc /= MC as f32;
     println!();

@@ -1,7 +1,7 @@
 #![allow(dead_code, non_snake_case, non_upper_case_globals)]
 
 use std::path::PathBuf;
-use clifford_sim::circuit::StabCircuit;
+use clifford_sim::circuit::*;
 use ndarray as nd;
 use whooie::{ loop_call, mkdir, write_npz };
 
@@ -11,7 +11,11 @@ fn eval_entropy(nqubits: usize, p_meas: f32, depth: usize, avg: usize) -> f32 {
     let mut s0: f32 = 0.0;
     for _ in 0..avg {
         circuit = StabCircuit::new(nqubits, p_meas, None, None);
-        s = circuit.run_simple(depth, false);
+        let config = CircuitConfig {
+            depth: DepthConfig::Const(depth),
+            gates: GateConfig::Simple,
+        };
+        s = circuit.run(config, None);
         s0 += s.into_iter().skip(depth / 3).sum::<f32>() / (depth / 3) as f32;
     }
     s0 / avg as f32
