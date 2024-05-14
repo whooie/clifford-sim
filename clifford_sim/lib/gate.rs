@@ -152,6 +152,117 @@ impl Mul<Phase> for i8 {
     }
 }
 
+/// Identifier for a single one-qubit gate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum G1 {
+    /// Hadamard
+    H,
+    /// π rotation about X
+    X,
+    /// π rotation about Y
+    Y,
+    /// π rotation about Z
+    Z,
+    /// π/2 rotation about Z
+    S,
+    /// -π/2 rotation about Z
+    SInv,
+}
+
+impl G1 {
+    /// Returns `true` if `self` is `H`.
+    pub fn is_h(&self) -> bool { matches!(self, Self::H) }
+
+    /// Returns `true` if `self` is `X`.
+    pub fn is_x(&self) -> bool { matches!(self, Self::X) }
+
+    /// Returns `true` if `self` is `Y`.
+    pub fn is_y(&self) -> bool { matches!(self, Self::Y) }
+
+    /// Returns `true` if `self` is `Z`.
+    pub fn is_z(&self) -> bool { matches!(self, Self::Z) }
+
+    /// Returns `true` if `self` is `S`.
+    pub fn is_s(&self) -> bool { matches!(self, Self::S) }
+
+    /// Returns `true` if `self` is `SInv`.
+    pub fn is_sinv(&self) -> bool { matches!(self, Self::SInv) }
+}
+
+/// Identifier for a single two-qubit gate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum G2 {
+    /// Z-controlled π rotation about X.
+    CX,
+    /// Z-controlled π rotation about Z.
+    CZ,
+    /// Swap
+    Swap,
+}
+
+impl G2 {
+    /// Returns `true` if `self` is `CX`.
+    pub fn is_cx(&self) -> bool { matches!(self, Self::CX) }
+
+    /// Returns `true` if `self` is `CZ`.
+    pub fn is_cz(&self) -> bool { matches!(self, Self::CZ) }
+
+    /// Returns `true` if `self` is `Swap`.
+    pub fn is_swap(&self) -> bool { matches!(self, Self::Swap) }
+}
+
+/// Identifier for a single gate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum G {
+    /// A one-qubit gate.
+    Q1(G1),
+    /// A two-qubit gate.
+    Q2(G2),
+}
+
+impl From<G1> for G {
+    fn from(kind1: G1) -> Self { Self::Q1(kind1) }
+}
+
+impl From<G2> for G {
+    fn from(kind2: G2) -> Self { Self::Q2(kind2) }
+}
+
+impl G {
+    /// Returns `true` if `self` is `Q1`.
+    pub fn is_q1(&self) -> bool { matches!(self, Self::Q1(..)) }
+
+    /// Returns `true` if `self` is `H`.
+    pub fn is_h(&self) -> bool { matches!(self, Self::Q1(g) if g.is_h()) }
+
+    /// Returns `true` if `self` is `X`.
+    pub fn is_x(&self) -> bool { matches!(self, Self::Q1(g) if g.is_x()) }
+
+    /// Returns `true` if `self` is `Y`.
+    pub fn is_y(&self) -> bool { matches!(self, Self::Q1(g) if g.is_y()) }
+
+    /// Returns `true` if `self` is `Z`.
+    pub fn is_z(&self) -> bool { matches!(self, Self::Q1(g) if g.is_z()) }
+
+    /// Returns `true` if `self` is `S`.
+    pub fn is_s(&self) -> bool { matches!(self, Self::Q1(g) if g.is_s()) }
+
+    /// Returns `true` if `self` is `SInv`.
+    pub fn is_sinv(&self) -> bool { matches!(self, Self::Q1(g) if g.is_sinv()) }
+
+    /// Returns `true` if `self` is `Q2`.
+    pub fn is_q2(&self) -> bool { matches!(self, Self::Q2(..)) }
+
+    /// Returns `true` if `self` is `CX`.
+    pub fn is_cx(&self) -> bool { matches!(self, Self::Q2(g) if g.is_cx()) }
+
+    /// Returns `true` if `self` is `CZ`.
+    pub fn is_cz(&self) -> bool { matches!(self, Self::Q2(g) if g.is_cz()) }
+
+    /// Returns `true` if `self` is `Swap`.
+    pub fn is_swap(&self) -> bool { matches!(self, Self::Q2(g) if g.is_swap()) }
+}
+
 /// Description of a single gate for a register of `N` qubits.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -165,6 +276,8 @@ pub enum Gate {
     Z(usize),
     /// π/2 rotation about Z
     S(usize),
+    /// -π/2 rotation about Z
+    SInv(usize),
     /// Z-controlled π rotation about X.
     ///
     /// The first qubit index is the control.
@@ -193,23 +306,48 @@ impl Gate {
     /// Return `true` if `self` is `S`.
     pub fn is_s(&self) -> bool { matches!(self, Self::S(..)) }
 
+    /// Return `true` if `self` is `SInv`.
+    pub fn is_sinv(&self) -> bool { matches!(self, Self::SInv(..)) }
+
     /// Return `true` if `self` is `CX`.
     pub fn is_cx(&self) -> bool { matches!(self, Self::CX(..)) }
 
+    /// Return `true` if `self` is `CZ`.
+    pub fn is_cz(&self) -> bool { matches!(self, Self::CZ(..)) }
+
     /// Return `true` if `self` is `Swap`.
     pub fn is_swap(&self) -> bool { matches!(self, Self::Swap(..)) }
+
+    /// Return the [kind][G] of `self`.
+    pub fn kind(&self) -> G {
+        use G::*;
+        use G1::*;
+        use G2::*;
+        match *self {
+            Self::H(..) => Q1(H),
+            Self::X(..) => Q1(X),
+            Self::Y(..) => Q1(Y),
+            Self::Z(..) => Q1(Z),
+            Self::S(..) => Q1(S),
+            Self::SInv(..) => Q1(SInv),
+            Self::CX(..) => Q2(CX),
+            Self::CZ(..) => Q2(CZ),
+            Self::Swap(..) => Q2(Swap),
+        }
+    }
 
     /// Sample a random single-qubit gate (`H`, `X`, `Y`, `Z`, or `S`) for a
     /// given qubit index.
     pub fn sample_single<R>(idx: usize, rng: &mut R) -> Self
     where R: Rng + ?Sized
     {
-        match rng.gen_range(0..5_usize) {
+        match rng.gen_range(0..6_usize) {
             0 => Self::H(idx),
             1 => Self::X(idx),
             2 => Self::Y(idx),
             3 => Self::Z(idx),
             4 => Self::S(idx),
+            5 => Self::SInv(idx),
             _ => unreachable!(),
         }
     }
@@ -330,6 +468,7 @@ impl Clifford {
                     | Gate::Y(k)
                     | Gate::Z(k)
                     | Gate::S(k)
+                    | Gate::SInv(k)
                     => *k <= n,
                     Gate::CX(a, b)
                     | Gate::CZ(a, b)

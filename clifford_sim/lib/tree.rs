@@ -425,6 +425,14 @@ impl<const N: usize> Pure<N> {
                     Zp => { Some(Pi0) },
                     Zm => { Some(Pi1h) },
                 },
+                Gate::SInv(k) if k < N => match reg[k] {
+                    Xp => { reg[k] = Ym; Some(Pi0) },
+                    Xm => { reg[k] = Yp; Some(Pi0) },
+                    Yp => { reg[k] = Xp; Some(Pi0) },
+                    Ym => { reg[k] = Xm; Some(Pi0) },
+                    Zp => { Some(Pi0) },
+                    Zm => { Some(Pi3h) },
+                },
                 Gate::CX(a, b) if a < N && b < N && a != b
                 => match (reg[a], reg[b]) {
                     (Xp, Xp) => { Some(Pi0) },

@@ -379,7 +379,7 @@ impl Graph {
             j5 = i >> 5;
             pw = 1 << (i & 31);
             if stab.z[(i, j5)] & pw != 0 {
-                stab.apply_s(i).apply_s(i).apply_s(i); // phase gate inverse
+                stab.apply_sinv(i);
             }
             if stab.r[i] % 4 == 2 {
                 stab.apply_z(i);

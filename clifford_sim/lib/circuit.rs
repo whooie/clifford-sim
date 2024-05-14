@@ -12,12 +12,18 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct StabCircuit {
     pub state: Stab,
-    pub outcomes: Vec<Vec<Option<Outcome>>>,
     pub p_meas: f32,
     pub cut: Option<EntropyCut>,
     n: usize,
     rng: StdRng,
 }
+
+/// The outcomes associated with a single measurement layer, ordered by qubit
+/// index.
+pub type MeasLayer = Vec<Option<Outcome>>;
+
+/// The outcomes from each measurement layer in a full circuit.
+pub type MeasRecord = Vec<MeasLayer>;
 
 impl StabCircuit {
     /// Create a new `StabCircuit` for a 1 chain of `n` qubits, with state
@@ -43,7 +49,7 @@ impl StabCircuit {
         let rng
             = seed.map(StdRng::seed_from_u64)
             .unwrap_or_else(StdRng::from_entropy);
-        Self { state: Stab::new(n), outcomes: Vec::new(), p_meas, cut, n, rng }
+        Self { state: Stab::new(n), p_meas, cut, n, rng }
     }
 
     /// Return the number of qubits.
@@ -59,11 +65,11 @@ impl StabCircuit {
     fn measure(&mut self, buf: &mut [Option<Outcome>]) {
         buf.iter_mut()
             .enumerate()
-            .for_each(|(k, ok)| {
+            .for_each(|(k, outk)| {
                 if self.rng.gen::<f32>() < self.p_meas {
-                    *ok = Some(self.state.measure(k, &mut self.rng));
+                    *outk = Some(self.state.measure(k, &mut self.rng));
                 } else {
-                    *ok = None;
+                    *outk = None;
                 }
             });
     }
@@ -91,7 +97,14 @@ impl StabCircuit {
     ///
     /// Returns the entanglement entropy measured once before any operations
     /// have been performed, and then after each round of measurements.
-    pub fn run_simple(&mut self, depth: usize, keep_meas: bool) -> Vec<f32> {
+    /// Optionally provide a mutable reference to a list of measurements to
+    /// record the outcomes from the circuit.
+    pub fn run_simple(
+        &mut self,
+        depth: usize,
+        mut meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32>
+    {
         let mut gates: Vec<Gate> = Vec::new();
         let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
         let mut entropy: Vec<f32> = Vec::with_capacity(depth + 1);
@@ -102,8 +115,8 @@ impl StabCircuit {
             gates.clear();
 
             self.measure(&mut outcomes);
-            if keep_meas {
-                self.outcomes.push(outcomes.clone());
+            if let Some(record) = meas.as_mut() {
+                record.push(outcomes.clone());
             }
 
             entropy.push(self.entropy());
@@ -111,7 +124,50 @@ impl StabCircuit {
         entropy
     }
 
-    pub fn run_simple_until_converged(&mut self, tol: Option<f32>) -> Vec<f32> {
+    /// Lazy iterator version of [`Self::run_simple`].
+    pub fn run_simple_lazy<'a>(
+        &'a mut self,
+        depth: usize,
+        mut meas: Option<&'a mut MeasRecord>
+    ) -> impl Iterator<Item = f32> + '_
+    {
+        let mut gates: Vec<Gate> = Vec::new();
+        let mut outcomes: MeasLayer = vec![None; self.n];
+        let entropy_init = [self.entropy()].into_iter();
+        let entropy_iter
+            = (0..depth)
+            .map(move |d| {
+                self.gates_simple(d % 2 == 1, &mut gates);
+                self.state.apply_circuit(&gates);
+                gates.clear();
+
+                self.measure(&mut outcomes);
+                if let Some(record) = meas.as_mut() {
+                    record.push(outcomes.clone());
+                }
+                self.entropy()
+            });
+        entropy_init.chain(entropy_iter)
+    }
+
+    /// Like [`Self::run_simple`], but run the circuit until the entropy in the
+    /// system has converged to within `tol`, which defaults to 10<sup>-4</sup>.
+    ///
+    /// The criterion for convergence is
+    /// ```math
+    /// 2 \left| \frac{\mu_{k+1} - \mu_k}{\mu_{k+1} + \mu_k} \right| < \text{tol}
+    /// ```
+    /// where `$\mu_k$` is the running average of the first `$k$` entropy
+    /// measurement, including the first before the circuit has begun; i.e. the
+    /// entropy has reached a steady state when the absolute difference between
+    /// consecutive values of the running average divided by their mean is less
+    /// than `tol`.
+    pub fn run_simple_until_converged(
+        &mut self,
+        tol: Option<f32>,
+        mut meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32>
+    {
         let tol = tol.unwrap_or(1e-4);
         let mut gates: Vec<Gate> = Vec::new();
         let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
@@ -127,7 +183,9 @@ impl StabCircuit {
             gates.clear();
 
             self.measure(&mut outcomes);
-            self.outcomes.push(outcomes.clone());
+            if let Some(record) = meas.as_mut() {
+                record.push(outcomes.clone());
+            }
 
             s = self.entropy();
             entropy.push(s);
@@ -143,24 +201,29 @@ impl StabCircuit {
     /// Run a simple MIPT procedure with feedback on measurement outcomes.
     ///
     /// At each layer in the circuit, the previous layer's measurement outcomes
-    /// are passed to the supplied closure along with the current circuit depth
-    /// to determine when to halt or what gates to apply. For the first layer,
-    /// no measurements have been performed and hence an array of `None`s is
-    /// passed to the closure. After gates are applied, measurements are
-    /// performed on each qubit with probability `self.p_meas`, whose outcomes
-    /// are then passed back to the closure.
+    /// and state entropy are passed to the supplied closure along with the
+    /// current circuit depth to determine when to halt or what gates to apply.
+    /// For the first layer, no measurements have been performed and hence an
+    /// array of `None`s is passed to the closure. After gates are applied,
+    /// measurements are performed on each qubit with probability `self.p_meas`,
+    /// whose outcomes are then passed back to the closure.
     ///
     /// Returns the entanglement entropy measured once before the first layer,
     /// and then after each round of measurements.
-    pub fn run_feedback<F>(&mut self, mut feedback: F) -> Vec<f32>
-    where F: FnMut(usize, &[Option<Outcome>]) -> Feedback
+    pub fn run_feedback<F>(
+        &mut self,
+        mut feedback: F,
+        mut meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32>
+    where F: FnMut(usize, f32, &[Option<Outcome>]) -> Feedback
     {
         let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
-        let mut entropy: Vec<f32> = vec![self.entropy()];
+        let mut s: f32 = self.entropy();
+        let mut entropy: Vec<f32> = vec![s];
         let mut gates: Vec<Gate> = Vec::new();
         let mut d: usize = 0;
         loop {
-            match feedback(0, &outcomes) {
+            match feedback(d, s, &outcomes) {
                 Feedback::Halt => { break entropy; },
                 Feedback::Simple => {
                     self.gates_simple(d % 2 == 1, &mut gates);
@@ -173,9 +236,12 @@ impl StabCircuit {
             }
 
             self.measure(&mut outcomes);
-            self.outcomes.push(outcomes.clone());
+            if let Some(record) = meas.as_mut() {
+                record.push(outcomes.clone());
+            }
 
-            entropy.push(self.entropy());
+            s = self.entropy();
+            entropy.push(s);
             d += 1;
         }
     }
@@ -186,7 +252,12 @@ impl StabCircuit {
     ///
     /// Returns the entanglement entropy measured once before the first layer,
     /// and then after each round of measurements.
-    pub fn run_clifford(&mut self, depth: usize) -> Vec<f32> {
+    pub fn run_clifford(
+        &mut self,
+        depth: usize,
+        mut meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32>
+    {
         let mut gates: Clifford;
         let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
         let mut entropy: Vec<f32> = Vec::with_capacity(depth + 1);
@@ -196,7 +267,9 @@ impl StabCircuit {
             self.state.apply_circuit(&gates);
 
             self.measure(&mut outcomes);
-            self.outcomes.push(outcomes.clone());
+            if let Some(record) = meas.as_mut() {
+                record.push(outcomes.clone());
+            }
 
             entropy.push(self.entropy());
         }

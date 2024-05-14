@@ -166,6 +166,27 @@ impl Stab {
         self
     }
 
+    /// Apply an S<sup>†</sup> gate (= Z(-π/2)) to the `k`-th qubit.
+    pub fn apply_sinv(&mut self, k: usize) -> &mut Self {
+        if k >= self.n { return self; }
+        self.apply_sinv_unchecked(k)
+    }
+
+    fn apply_sinv_unchecked(&mut self, k: usize) -> &mut Self {
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        for ((x_i_k5, z_i_k5), r_i) in
+            self.x.column_mut(k5).iter_mut()
+                .zip(self.z.column_mut(k5).iter_mut())
+                .zip(self.r.iter_mut())
+                .take(2 * self.n)
+        {
+            if *x_i_k5 & pw != 0 && *z_i_k5 & pw == 0 { *r_i = (*r_i + 2) % 4; }
+            *z_i_k5 ^= *x_i_k5 & pw;
+        }
+        self
+    }
+
     /// Apply X gate to the `k`-th qubit.
     pub fn apply_x(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
@@ -327,6 +348,7 @@ impl Stab {
             Gate::Y(k) if k < self.n => self.apply_y_unchecked(k),
             Gate::Z(k) if k < self.n => self.apply_z_unchecked(k),
             Gate::S(k) if k < self.n => self.apply_s_unchecked(k),
+            Gate::SInv(k) if k < self.n => self.apply_sinv_unchecked(k),
             Gate::CX(a, b) if a < self.n && b < self.n && a != b
                 => self.apply_cnot_unchecked(a, b),
             Gate::CZ(a, b) if a < self.n && b < self.n && a != b
