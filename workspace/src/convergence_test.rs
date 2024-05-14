@@ -18,7 +18,7 @@ fn main() {
 
     for k in 0..MC {
         print_flush!("\r {} ", k);
-        let mut circuit = StabCircuit::<N>::new(P_MEAS, None, None);
+        let mut circuit = StabCircuit::new(N, P_MEAS, None, None);
         let s = circuit.run_simple_until_converged(Some(TOL));
         let n = s.len();
         depth_acc.push(n);

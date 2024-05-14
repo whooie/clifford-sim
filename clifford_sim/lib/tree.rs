@@ -356,7 +356,7 @@ impl<const N: usize> Pure<N> {
     pub fn apply_gate(&mut self, gate: Gate) -> Option<Phase> {
         use Qubit::*;
         use Phase::*;
-        macro_rules! cnot {
+        macro_rules! zsup {
             (
                 $self:ident,
                 $reg:ident,
@@ -423,36 +423,37 @@ impl<const N: usize> Pure<N> {
                     Zp => { Some(Pi0) },
                     Zm => { Some(Pi1h) },
                 },
-                Gate::CX(a, b) if a < N && b < N => match (reg[a], reg[b]) {
+                Gate::CX(a, b) if a < N && b < N && a != b
+                => match (reg[a], reg[b]) {
                     (Xp, Xp) => { Some(Pi0) },
                     (Xp, Xm) => { reg[a] = Xm; Some(Pi0) },
                     (Xm, Xp) => { Some(Pi0) },
                     (Xm, Xm) => { reg[a] = Xp; Some(Pi0) },
                     //
-                    (Xp, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi1h, Pi0) },
-                    (Xp, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi3h, Pi0) },
-                    (Xm, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi3h, Pi0) },
-                    (Xm, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi1h, Pi0) },
+                    (Xp, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi1h, Pi0) },
+                    (Xp, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi3h, Pi0) },
+                    (Xm, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi3h, Pi0) },
+                    (Xm, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi1h, Pi0) },
                     //
-                    (Xp, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi0,  Pi0) },
-                    (Xp, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi0,  Pi0) },
-                    (Xm, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi,   Pi0) },
-                    (Xm, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi,   Pi0) },
+                    (Xp, Zp) => { zsup!(self, reg, a, b, Zp, Zm, Pi0,  Pi0) },
+                    (Xp, Zm) => { zsup!(self, reg, a, b, Zm, Zp, Pi0,  Pi0) },
+                    (Xm, Zp) => { zsup!(self, reg, a, b, Zp, Zm, Pi,   Pi0) },
+                    (Xm, Zm) => { zsup!(self, reg, a, b, Zm, Zp, Pi,   Pi0) },
                     //
                     (Yp, Xp) => { Some(Pi0) },
                     (Yp, Xm) => { reg[a] = Ym; Some(Pi0) },
                     (Ym, Xp) => { Some(Pi0) },
                     (Ym, Xm) => { reg[a] = Yp; Some(Pi0) },
                     //
-                    (Yp, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi,   Pi0) },
-                    (Yp, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi0,  Pi0) },
-                    (Ym, Yp) => { cnot!(self, reg, a, b, Yp, Ym, Pi0,  Pi0) },
-                    (Ym, Ym) => { cnot!(self, reg, a, b, Ym, Yp, Pi,   Pi0) },
+                    (Yp, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi,   Pi0) },
+                    (Yp, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi0,  Pi0) },
+                    (Ym, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi0,  Pi0) },
+                    (Ym, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi,   Pi0) },
                     //
-                    (Yp, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi1h, Pi0) },
-                    (Yp, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi1h, Pi0) },
-                    (Ym, Zp) => { cnot!(self, reg, a, b, Zp, Zm, Pi3h, Pi0) },
-                    (Ym, Zm) => { cnot!(self, reg, a, b, Zm, Zp, Pi3h, Pi0) },
+                    (Yp, Zp) => { zsup!(self, reg, a, b, Zp, Zm, Pi1h, Pi0) },
+                    (Yp, Zm) => { zsup!(self, reg, a, b, Zm, Zp, Pi1h, Pi0) },
+                    (Ym, Zp) => { zsup!(self, reg, a, b, Zp, Zm, Pi3h, Pi0) },
+                    (Ym, Zm) => { zsup!(self, reg, a, b, Zm, Zp, Pi3h, Pi0) },
                     //
                     (Zp, Xp) => { Some(Pi0) },
                     (Zp, Xm) => { Some(Pi0) },
@@ -468,6 +469,53 @@ impl<const N: usize> Pure<N> {
                     (Zp, Zm) => { Some(Pi0) },
                     (Zm, Zp) => { reg[b] = Zm; Some(Pi0) },
                     (Zm, Zm) => { reg[b] = Zp; Some(Pi0) },
+                },
+                Gate::CZ(a, b) if a < N && b < N && a != b
+                => match (reg[a], reg[b]) {
+                    (Xp, Xp) => { zsup!(self, reg, a, b, Xp, Xm, Pi0,  Pi0) },
+                    (Xp, Xm) => { zsup!(self, reg, a, b, Xm, Xp, Pi0,  Pi0) },
+                    (Xm, Xp) => { zsup!(self, reg, a, b, Xp, Xm, Pi,   Pi0) },
+                    (Xm, Xm) => { zsup!(self, reg, a, b, Xm, Xp, Pi,   Pi0) },
+                    //
+                    (Xp, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi0,  Pi0) },
+                    (Xp, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi0,  Pi0) },
+                    (Xm, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi,   Pi0) },
+                    (Xm, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi,   Pi0) },
+                    //
+                    (Xp, Zp) => { Some(Pi0) },
+                    (Xp, Zm) => { reg[a] = Xm; Some(Pi0) },
+                    (Xm, Zp) => { Some(Pi0) },
+                    (Xm, Zm) => { reg[a] = Xp; Some(Pi0) },
+                    //
+                    (Yp, Xp) => { zsup!(self, reg, a, b, Xp, Xm, Pi1h, Pi0) },
+                    (Yp, Xm) => { zsup!(self, reg, a, b, Xm, Xp, Pi1h, Pi0) },
+                    (Ym, Xp) => { zsup!(self, reg, a, b, Xp, Xm, Pi3h, Pi0) },
+                    (Ym, Xm) => { zsup!(self, reg, a, b, Xm, Xp, Pi3h, Pi0) },
+                    //
+                    (Yp, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi1h, Pi0) },
+                    (Yp, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi1h, Pi0) },
+                    (Ym, Yp) => { zsup!(self, reg, a, b, Yp, Ym, Pi3h, Pi0) },
+                    (Ym, Ym) => { zsup!(self, reg, a, b, Ym, Yp, Pi3h, Pi0) },
+                    //
+                    (Yp, Zp) => { Some(Pi0) },
+                    (Yp, Zm) => { reg[a] = Ym; Some(Pi0) },
+                    (Ym, Zp) => { Some(Pi0) },
+                    (Ym, Zm) => { reg[a] = Yp; Some(Pi0) },
+                    //
+                    (Zp, Xp) => { Some(Pi0) },
+                    (Zp, Xm) => { Some(Pi0) },
+                    (Zm, Xp) => { reg[b] = Xm; Some(Pi0) },
+                    (Zm, Xm) => { reg[b] = Xp; Some(Pi0) },
+                    //
+                    (Zp, Yp) => { Some(Pi0) },
+                    (Zp, Ym) => { Some(Pi0) },
+                    (Zm, Yp) => { reg[b] = Ym; Some(Pi0) },
+                    (Zm, Ym) => { reg[b] = Yp; Some(Pi0) },
+                    //
+                    (Zp, Zp) => { Some(Pi0) },
+                    (Zp, Zm) => { Some(Pi0) },
+                    (Zm, Zp) => { Some(Pi0) },
+                    (Zm, Zm) => { Some(Pi) },
                 },
                 Gate::Swap(a, b) if a < N && b < N => {
                     reg.0.swap(a, b);

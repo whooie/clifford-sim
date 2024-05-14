@@ -14,8 +14,8 @@
 //! each node *i* in the graph, the generating stabilizer *S*<sub>*i*</sub> is
 //! equal to *X* applied to *i* and *Z* applied to each of *i*'s neighbors.
 //!
-//! This relationship allows for conversion from [`Stab`]/[`StabD`] states to
-//! [`Graph`] states in *O*(*N*<sup>3</sup>) time as well as the reverse in
+//! This relationship allows for conversion from [`Stab`] states to [`Graph`]
+//! states in *O*(*N*<sup>3</sup>) time as well as the reverse in
 //! *O*(*N*<sup>2</sup>) time.
 //!
 //! The code in this module follows information from a nice introductory [blog
@@ -25,13 +25,12 @@
 //! # Example
 //! ```
 //! use clifford_sim::graph::Graph;
-//! use clifford_sim::stab::{ Stab, StabGroup };
 //!
 //! const N: usize = 5; // number of qubits
 //!
 //! fn main() {
 //!     // initialize a totally disconnected graph
-//!     let mut graph: Graph<N> = Graph::new();
+//!     let mut graph: Graph = Graph::new(N);
 //!
 //!     // apply CZs to form the 5-qubit "star" state; this graph is locally
 //!     // equivalent to the 5-qubit GHZ state
@@ -49,7 +48,7 @@
 //!     // +1 Z...X
 //!
 //!     // convert to an ordinary stabilizer state
-//!     let mut stab: Stab<N> = graph.to_stab();
+//!     let mut stab = graph.to_stab();
 //!
 //!     // apply Hadamards to convert the CZs above to CNOTs for the usual GHZ
 //!     // preparation circuit
@@ -75,6 +74,7 @@
 //! [rohde]: https://peterrohde.org/an-introduction-to-graph-states/
 //! [vijayan]: https://arxiv.org/abs/2209.07345
 
+
 use std::{
     fmt,
     fs,
@@ -83,43 +83,47 @@ use std::{
 };
 use itertools::Itertools;
 use ndarray as nd;
-use crate::{
+use crate:: {
     gate::{ Basis, Pauli, Phase },
     stab::{ Stab, NPauli },
-    stabd::StabD,
 };
 
-/// A statically sized `N`-qubit graph state.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Graph<const N: usize> {
-    pub(crate) adj: [[bool; N]; N],
+/// A graph state of a collection of qubits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Graph {
+    n: usize,
+    adj: nd::Array2<bool>,
 }
 
-impl<const N: usize> Default for Graph<N> {
-    fn default() -> Self { Self::new() }
-}
+impl Graph {
+    /// Create a new, totally disconnected graph state of `n` qubits.
+    pub fn new(n: usize) -> Self {
+        Self { n, adj: nd::Array2::from_elem((n, n), false) } }
 
-impl<const N: usize> Graph<N> {
-    /// Create a new, totally disconnected graph state.
-    pub fn new() -> Self { Self { adj: [[false; N]; N] } }
-
-    /// Return an iterator over the indices of all nodes that share an edge with
+    /// Return an iterator over the indices of all nodes who share an edge with
     /// a given source node.
-    pub fn neighbors_of(&self, node: usize) -> Neighbors<'_, N> {
-        if node < N {
-            NeighborsData::Iter(self.adj[node].iter().enumerate()).into()
+    ///
+    /// Returns `Err` if the node doesn't exist.
+    pub fn neighbors_of(&self, node: usize) -> Neighbors<'_> {
+        if node < self.n {
+            let iter
+                = self.adj.slice(nd::s![node, ..])
+                .into_iter()
+                .enumerate();
+            NeighborsData::Iter(iter).into()
         } else {
             NeighborsData::Empty.into()
         }
     }
 
-    fn neighbors_of_unchecked(&self, node: usize) -> Neighbors<'_, N> {
-        NeighborsData::Iter(self.adj[node].iter().enumerate()).into()
+    fn neighbors_of_unchecked(&self, node: usize) -> Neighbors<'_> {
+        let iter = self.adj.slice(nd::s![node, ..]).into_iter().enumerate();
+        NeighborsData::Iter(iter).into()
     }
 
     fn toggle_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[a][b] ^= true;
-        self.adj[b][a] ^= true;
+        self.adj[[a, b]] ^= true;
+        self.adj[[b, a]] ^= true;
         self
     }
 
@@ -128,13 +132,13 @@ impl<const N: usize> Graph<N> {
     ///
     /// This is equivalent to applying a CZ gate to `a` and `b`.
     pub fn toggle_edge(&mut self, a: usize, b: usize) -> &mut Self {
-        if a >= N || b >= N || a == b { return self; }
+        if a >= self.n || b >= self.n || a == b { return self; }
         self.toggle_edge_unchecked(a, b)
     }
 
     fn add_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[a][b] = true;
-        self.adj[b][a] = true;
+        self.adj[[a, b]] = true;
+        self.adj[[b, a]] = true;
         self
     }
 
@@ -142,13 +146,13 @@ impl<const N: usize> Graph<N> {
     ///
     /// Does nothing if an edge already exists.
     pub fn add_edge(&mut self, a: usize, b: usize) -> &mut Self {
-        if a >= N || b >= N || a == b { return self; }
+        if a >= self.n || b >= self.n || a == b { return self; }
         self.add_edge_unchecked(a, b)
     }
 
     fn remove_edge_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        self.adj[a][b] = false;
-        self.adj[b][a] = false;
+        self.adj[[a, b]] = false;
+        self.adj[[b, a]] = false;
         self
     }
 
@@ -156,7 +160,7 @@ impl<const N: usize> Graph<N> {
     ///
     /// Does nothing if `a` and `b` are not connected.
     pub fn remove_edge(&mut self, a: usize, b: usize) -> &mut Self {
-        if a >= N || b >= N || a == b { return self; }
+        if a >= self.n || b >= self.n { return self; }
         self.remove_edge_unchecked(a, b)
     }
 
@@ -168,13 +172,13 @@ impl<const N: usize> Graph<N> {
     }
 
     fn disconnect_node_unchecked(&mut self, node: usize) -> &mut Self {
-        (0..N).for_each(|k| { self.remove_edge_unchecked(node, k); });
+        (0..self.n).for_each(|k| { self.remove_edge_unchecked(node, k); });
         self
     }
 
     /// Disconnect `node` from all of its neighbors.
     pub fn disconnect_node(&mut self, node: usize) -> &mut Self {
-        if node >= N { return self; }
+        if node >= self.n { return self; }
         self.disconnect_node_unchecked(node)
     }
 
@@ -192,17 +196,17 @@ impl<const N: usize> Graph<N> {
     /// That is, toggle all edges in the subgraph induced by the neighborhood of
     /// `node`.
     pub fn local_complement(&mut self, node: usize) -> &mut Self {
-        if node >= N { return self; }
+        if node >= self.n { return self; }
         self.local_complement_unchecked(node)
     }
 
     /// Return a generating set for the stabilizer group of `self`.
-    pub fn stabilizers(&self) -> Stabilizers<N> {
-        let npauli: NPauli<N>
-            = NPauli { phase: Phase::Pi0, ops: [Pauli::I; N] };
-        let mut stabs: [NPauli<N>; N] = [npauli; N];
+    pub fn stabilizers(&self) -> Stabilizers {
+        let npauli: NPauli
+            = NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
+        let mut stabs: Vec<NPauli> = vec![npauli.clone(); self.n];
         let iter1
-            = self.adj.iter()
+            = self.adj.axis_iter(nd::Axis(0))
             .zip(stabs.iter_mut())
             .enumerate();
         for (i, (row, stab)) in iter1 {
@@ -227,7 +231,7 @@ impl<const N: usize> Graph<N> {
     ///
     /// Measured qubits are not removed.
     pub fn measure(&mut self, node: usize, basis: Basis) -> &mut Self {
-        if node >= N { return self; }
+        if node >= self.n { return self; }
         match basis {
             Basis::Z => { self.disconnect_node_unchecked(node); },
             Basis::Y => {
@@ -236,7 +240,7 @@ impl<const N: usize> Graph<N> {
             },
             Basis::X => {
                 let some_neighbor: Option<usize>
-                    = self.adj[node].iter()
+                    = self.adj.slice(nd::s![node, ..]).iter()
                     .enumerate()
                     .find_map(|(k, a)| a.then_some(k));
                 if let Some(k) = some_neighbor {
@@ -254,7 +258,7 @@ impl<const N: usize> Graph<N> {
     }
 
     /// Convert to a [`Stab`].
-    pub fn to_stab(&self) -> Stab<N> {
+    pub fn to_stab(&self) -> Stab {
         // any graph state can be formed by taking an initial ∣0...0⟩ state,
         // applying a Hadamard to every qubit, and then applying CZ gates for
         // every edge in the graph; this implies that the resulting stabilizer
@@ -264,71 +268,67 @@ impl<const N: usize> Graph<N> {
         //    of Z) should be the identity
         // 3. the bottom-right block (rows N..2 * N of Z) should be the
         //    adjacency matrix of the graph
-        let over32: usize = (N >> 5) + 1;
-        let mut x: nd::Array2<u32> = nd::Array2::zeros((2 * N + 1, over32));
-        let mut z: nd::Array2<u32> = nd::Array2::zeros((2 * N + 1, over32));
-        let r: nd::Array1<u8> = nd::Array1::zeros(2 * N + 1);
+        let over32: usize = (self.n >> 5) + 1;
+        let mut x: nd::Array2<u32>
+            = nd::Array2::zeros((2 * self.n + 1, over32));
+        let mut z: nd::Array2<u32>
+            = nd::Array2::zeros((2 * self.n + 1, over32));
+        let r: nd::Array1<u8> = nd::Array1::zeros(2 * self.n + 1);
         for (i, mut xi) in
-            x.axis_iter_mut(nd::Axis(0)).skip(N).take(N).enumerate()
+            x.axis_iter_mut(nd::Axis(0)).skip(self.n).take(self.n).enumerate()
         {
             xi[i >> 5] = 1 << (i & 31);
         }
         for (i, mut zi) in
-            z.axis_iter_mut(nd::Axis(0)).take(N).enumerate()
+            z.axis_iter_mut(nd::Axis(0)).take(self.n).enumerate()
         {
             zi[i >> 5] = 1 << (i & 31);
         }
         let mut j5: usize;
-        let iter = z.axis_iter_mut(nd::Axis(0)).skip(N).zip(&self.adj);
-        for (mut zi, adji) in iter {
-            for (j, adjij) in adji.iter().enumerate() {
-                if *adjij {
-                    j5 = j >> 5;
-                    zi[j5] ^= 1 << (j & 31);
-                }
+        for ((i, j), adjij) in self.adj.indexed_iter() {
+            if *adjij {
+                j5 = j >> 5;
+                z[[i, j5]] ^= 1 << (j & 31);
             }
         }
-        Stab { x, z, r, over32 }
+        Stab { n: self.n, x, z, r, over32 }
     }
 
-    /// Convert to a [`StabD`].
-    pub fn to_stabd(&self) -> StabD { self.to_stab().into() }
-
     /// Convert from a [`Stab`].
-    pub(crate) fn from_stab(mut stab: Stab<N>) -> Self {
+    pub(crate) fn from_stab(mut stab: Stab) -> Self {
         // see Vijayan et al (arXiv:2209.07345) for details on this algorithm
         let mut j5: usize;
         let mut pw: u32;
         // make the X block full rank (O(N^3))
         let mut all_zeros: bool;
-        for j in 0..N {
+        for j in 0..stab.n {
             j5 = j >> 5;
             pw = 1 << (j & 31);
             all_zeros
                 = stab.x.slice(nd::s![.., j5]).iter()
-                .skip(N)
+                .skip(stab.n)
                 .all(|xij| xij & pw == 0);
             if all_zeros { stab.apply_h(j); }
-            for i in N + j + 1..2 * N {
+            for i in stab.n + j + 1..2 * stab.n {
                 if stab.x[[i, j5]] & pw != 0 {
                     stab.row_swap(i, j);
                     break;
                 }
             }
-            for i in N + j + 1..2 * N {
+            for i in stab.n + j + 1..2 * stab.n {
                 if stab.x[[i, j5]] & pw != 0 { stab.row_mul(i, j); }
             }
         }
         // diagonalize the X block (O(N^3))
-        for i in (N..2 * N - 1).rev() {
-            for j in (i + 1 - N..N).rev() {
+        for i in (stab.n..2 * stab.n - 1).rev() {
+            for j in (i + 1 - stab.n..stab.n).rev() {
                 j5 = j >> 5;
                 pw = 1 << (j & 31);
                 if stab.x[[i, j5]] & pw == 0 { stab.row_mul(j, i); }
             }
         }
         // make Z block diagonal zero and correct phases (O(N))
-        for i in N..2 * N {
+        for i in stab.n..2 * stab.n {
             j5 = i >> 5;
             pw = 1 << (i & 31);
             if stab.z[[i, j5]] & pw != 0 {
@@ -339,16 +339,19 @@ impl<const N: usize> Graph<N> {
             }
         }
         // convert to boolean adjacency matrix
-        let mut adj: [[bool; N]; N] = [[false; N]; N];
-        let iter = stab.z.axis_iter(nd::Axis(0)).skip(N).zip(adj.iter_mut());
-        for (zi, adji) in iter {
+        let mut adj: nd::Array2<bool>
+            = nd::Array2::from_elem((stab.n, stab.n), false);
+        let iter
+            = stab.z.axis_iter(nd::Axis(0)).skip(stab.n)
+            .zip(adj.axis_iter_mut(nd::Axis(0)));
+        for (zi, mut adji) in iter {
             for (j, adjij) in adji.iter_mut().enumerate() {
                 j5 = j << 5;
                 pw = 1 << (j & 31);
                 *adjij = zi[j5] & pw != 0;
             }
         }
-        Self { adj }
+        Self { n: stab.n, adj }
     }
 
     /// Return an object containing an encoding of `self` in the [dot
@@ -384,7 +387,7 @@ impl<const N: usize> Graph<N> {
                     ,
             );
         // add nodes
-        for k in 0..N {
+        for k in 0..self.n {
             let attrs
                 = AttrList::new()
                 .add_pair(label(k.to_string()))
@@ -395,13 +398,7 @@ impl<const N: usize> Graph<N> {
             statements = statements.add_node(k.into(), None, Some(attrs));
         }
         // add edges
-        let edge_iter
-            = self.adj.iter()
-            .enumerate()
-            .flat_map(|(i, row)| {
-                row.iter().enumerate().map(move |(j, adj)| ((i, j), adj))
-            });
-        for ((i, j), a) in edge_iter {
+        for ((i, j), a) in self.adj.indexed_iter() {
             if *a && j < i {
                 statements
                     = statements.add_edge(
@@ -437,26 +434,26 @@ impl<const N: usize> Graph<N> {
     }
 }
 
-impl<const N: usize> From<Stab<N>> for Graph<N> {
-    fn from(stab: Stab<N>) -> Self { Self::from_stab(stab) }
+impl From<Stab> for Graph {
+    fn from(stab: Stab) -> Self { Self::from_stab(stab) }
 }
 
-#[derive(Clone, Debug)]
-pub struct Neighbors<'a, const N: usize> {
-    data: NeighborsData<'a, N>,
+#[derive(Clone)]
+pub struct Neighbors<'a> {
+    data: NeighborsData<'a>,
 }
 
-#[derive(Clone, Debug)]
-enum NeighborsData<'a, const N: usize> {
+#[derive(Clone)]
+enum NeighborsData<'a> {
     Empty,
-    Iter(std::iter::Enumerate<std::slice::Iter<'a, bool>>),
+    Iter(std::iter::Enumerate<<nd::ArrayView1<'a, bool> as IntoIterator>::IntoIter>),
 }
 
-impl<'a, const N: usize> From<NeighborsData<'a, N>> for Neighbors<'a, N> {
-    fn from(data: NeighborsData<'a, N>) -> Self { Self { data } }
+impl<'a> From<NeighborsData<'a>> for Neighbors<'a> {
+    fn from(data: NeighborsData<'a>) -> Self { Self { data } }
 }
 
-impl<'a, const N: usize> Iterator for Neighbors<'a, N> {
+impl<'a> Iterator for Neighbors<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -468,14 +465,15 @@ impl<'a, const N: usize> Iterator for Neighbors<'a, N> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Stabilizers<const N: usize>(pub [NPauli<N>; N]);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stabilizers(pub Vec<NPauli>);
 
-impl<const N: usize> fmt::Display for Stabilizers<N> {
+impl fmt::Display for Stabilizers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = self.0.len();
         for (k, stab) in self.0.iter().enumerate() {
             stab.fmt(f)?;
-            if k < N - 1 { writeln!(f)?; }
+            if k < n - 1 { writeln!(f)?; }
         }
         Ok(())
     }

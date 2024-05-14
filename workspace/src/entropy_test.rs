@@ -16,8 +16,8 @@ fn main() {
     let mut s_acc: nd::Array1<f32> = nd::Array1::zeros(DEPTH + 1);
     for k in 0..MC {
         print_flush!("\r {} ", k);
-        let mut circuit = StabCircuit::<N>::new(P_MEAS, None, None);
-        s_acc += &nd::Array1::from(circuit.run_simple(DEPTH));
+        let mut circuit = StabCircuit::new(N, P_MEAS, None, None);
+        s_acc += &nd::Array1::from(circuit.run_simple(DEPTH, false));
     }
     s_acc /= MC as f32;
     println!();

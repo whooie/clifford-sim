@@ -41,7 +41,7 @@
 //!
 //! fn main() {
 //!     // initialize a new state to ∣00000⟩
-//!     let mut stab: Stab<N> = Stab::new();
+//!     let mut stab = Stab::new(N);
 //!
 //!     // generate a Bell state on qubits 0, 1
 //!     stab.apply_gate(Gate::H(0));
@@ -71,48 +71,47 @@
 
 use std::fmt;
 use ndarray::{ self as nd, s };
-// use ndarray_linalg::SVD;
 use rand::Rng;
 use crate::{
     gate::{ Gate, Pauli, Phase },
     graph::Graph,
 };
 
-pub(crate) const PW: [u32; 32] = [ // PW[i] = 2^i
+const PW: [u32; 32] = [ // PW[i] = 2^i
     1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
     65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216,
     33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648
 ];
 
-/// An `N`-qubit stabilizer state, identified by its stabilizer group.
+/// A stabilizer state of a finite register of qubits, identified by its
+/// stabilizer group.
+///
+/// Like [`Stab`], but for non-static system sizes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stab<const N: usize> {
-    // `x` and `z` are bit arrays of size (2N + 1) x N; for space efficiency,
+pub struct Stab {
+    pub(crate) n: usize,
+    // `x` and `z` are bit arrays of size (2n + 1) × n; for space efficiency,
     // the columns are packed into u32s
-    pub(crate) x: nd::Array2<u32>, // Pauli-X bits; size (2N + 1) x (floor(N / 8) + 1)
-    pub(crate) z: nd::Array2<u32>, // Pauli-Z bits; size (2N + 1) x (floor(N / 8) + 1)
-    pub(crate) r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2N + 1
+    pub(crate) x: nd::Array2<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) z: nd::Array2<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
+    pub(crate) r: nd::Array1<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
     pub(crate) over32: usize, // = floor(N / 8) + 1
 }
 
-impl<const N: usize> Default for Stab<N> {
-    fn default() -> Self { Self::new() }
-}
-
-impl<const N: usize> Stab<N> {
-    /// Create a new stabilizer state initialized to ∣0...0⟩.
-    pub fn new() -> Self {
-        let over32: usize = (N >> 5) + 1;
-        let x: nd::Array2<u32> = nd::Array2::zeros((2 * N + 1, over32));
-        let z: nd::Array2<u32> = nd::Array2::zeros((2 * N + 1, over32));
-        let r: nd::Array1<u8> = nd::Array1::zeros(2 * N + 1);
-        let mut q = Self { x, z, r, over32 };
+impl Stab {
+    /// Create a new stabilizer state of size `n` initialized to ∣0...0⟩.
+    pub fn new(n: usize) -> Self {
+        let over32: usize = (n >> 5) + 1;
+        let x: nd::Array2<u32> = nd::Array2::zeros((2 * n + 1, over32));
+        let z: nd::Array2<u32> = nd::Array2::zeros((2 * n + 1, over32));
+        let r: nd::Array1<u8> = nd::Array1::zeros(2 * n + 1);
+        let mut q = Self { n, x, z, r, over32 };
         let mut j: usize;
         for (i, ((mut xi, mut zi), _)) in q.row_iter_mut().enumerate() {
-            if i < N {
+            if i < n {
                 xi[i >> 5] = PW[i & 31];
-            } else if i < 2 * N {
-                j = i - N;
+            } else if i < 2 * n {
+                j = i - n;
                 zi[j >> 5] = PW[j & 31];
             }
         }
@@ -127,7 +126,7 @@ impl<const N: usize> Stab<N> {
         self.x.axis_iter(nd::Axis(0))
             .zip(self.z.axis_iter(nd::Axis(0)))
             .zip(self.r.axis_iter(nd::Axis(0)))
-            .take(2 * N)
+            .take(2 * self.n)
     }
 
     pub(crate) fn row_iter_mut(&mut self)
@@ -138,7 +137,7 @@ impl<const N: usize> Stab<N> {
         self.x.axis_iter_mut(nd::Axis(0))
             .zip(self.z.axis_iter_mut(nd::Axis(0)))
             .zip(self.r.axis_iter_mut(nd::Axis(0)))
-            .take(2 * N)
+            .take(2 * self.n)
     }
 
     pub(crate) fn col_iter(&self)
@@ -155,7 +154,13 @@ impl<const N: usize> Stab<N> {
             .zip(self.z.axis_iter_mut(nd::Axis(1)))
     }
 
+    /// Apply a Hadamard gate to the `k`-th qubit.
     pub fn apply_h(&mut self, k: usize) -> &mut Self {
+        if k >= self.n { return self; }
+        self.apply_h_unchecked(k)
+    }
+
+    fn apply_h_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
         let mut tmp: u32;
@@ -163,58 +168,77 @@ impl<const N: usize> Stab<N> {
             self.x.slice_mut(s![.., k5]).iter_mut()
                 .zip(self.z.slice_mut(s![.., k5]).iter_mut())
                 .zip(self.r.iter_mut())
-                .take(2 * N)
+                .take(2 * self.n)
         {
             tmp = *x_i_k5;
             *x_i_k5 ^= (*x_i_k5 ^ *z_i_k5) & pw;
             *z_i_k5 ^= (*z_i_k5 ^ tmp) & pw;
             if *x_i_k5 & pw != 0 && *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
         }
-        // for i in 0..2 * N {
-        //     tmp = self.x[[i, k5]];
-        //     self.x[[i, k5]] ^= (self.x[[i, k5]] ^ self.z[[i, k5]]) & pw;
-        //     self.z[[i, k5]] ^= (self.z[[i, k5]] ^ tmp) & pw;
-        //     if self.x[[i, k5]] & pw != 0 && self.z[[i, k5]] & pw != 0 {
-        //         self.r[i] = (self.r[i] + 2) % 4;
-        //     }
-        // }
         self
     }
 
+    /// Apply an S gate (= Z(π/2)) to the `k`-th qubit.
     pub fn apply_s(&mut self, k: usize) -> &mut Self {
+        if k >= self.n { return self; }
+        self.apply_s_unchecked(k)
+    }
+
+    fn apply_s_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
         for ((x_i_k5, z_i_k5), r_i) in
             self.x.slice_mut(s![.., k5]).iter_mut()
                 .zip(self.z.slice_mut(s![.., k5]).iter_mut())
                 .zip(self.r.iter_mut())
-                .take(2 * N)
+                .take(2 * self.n)
         {
             if *x_i_k5 & pw != 0 && *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
             *z_i_k5 ^= *x_i_k5 & pw;
         }
-        // for i in 0..2 * N {
-        //     if self.x[[i, k5]] & pw != 0 && self.z[[i, k5]] & pw != 0 {
-        //         self.r[i] = (self.r[i] + 2) % 4;
-        //     }
-        //     self.z[[i, k5]] ^= self.x[[i, k5]] & pw;
-        // }
         self
     }
 
+    /// Apply an X gate to the `k`-th qubit.
     pub fn apply_x(&mut self, k: usize) -> &mut Self {
-        self.apply_h(k).apply_z(k).apply_h(k)
+        if k >= self.n { return self; }
+        self.apply_x_unchecked(k)
     }
 
+    fn apply_x_unchecked(&mut self, k: usize) -> &mut Self {
+        self.apply_h_unchecked(k).apply_z_unchecked(k).apply_h_unchecked(k)
+    }
+
+    /// Apply an Y gate to the `k`-th qubit.
     pub fn apply_y(&mut self, k: usize) -> &mut Self {
-        self.apply_s(k).apply_x(k).apply_z(k).apply_s(k)
+        if k >= self.n { return self; }
+        self.apply_y_unchecked(k)
     }
 
+    fn apply_y_unchecked(&mut self, k: usize) -> &mut Self {
+        self.apply_s_unchecked(k)
+            .apply_x_unchecked(k)
+            .apply_z_unchecked(k)
+            .apply_s_unchecked(k)
+    }
+
+    /// Apply an Z gate to the `k`-th qubit.
     pub fn apply_z(&mut self, k: usize) -> &mut Self {
-        self.apply_s(k).apply_s(k)
+        if k >= self.n { return self; }
+        self.apply_z_unchecked(k)
     }
 
+    fn apply_z_unchecked(&mut self, k: usize) -> &mut Self {
+        self.apply_s_unchecked(k).apply_s_unchecked(k)
+    }
+
+    /// Apply a CNOT gate to the `b`-th qubit, with the `a`-th qubit as control.
     pub fn apply_cnot(&mut self, a: usize, b: usize) -> &mut Self {
+        if a >= self.n || b >= self.n || a == b { return self; }
+        self.apply_cnot_unchecked(a, b)
+    }
+
+    fn apply_cnot_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
         let pwa: u32 = PW[a & 31];
@@ -223,7 +247,7 @@ impl<const N: usize> Stab<N> {
             self.x.axis_iter_mut(nd::Axis(0))
                 .zip(self.z.axis_iter_mut(nd::Axis(0)))
                 .zip(self.r.iter_mut())
-                .take(2 * N)
+                .take(2 * self.n)
         {
             if x_i[a5] & pwa != 0 { x_i[b5] ^= pwb; }
             if z_i[b5] & pwb != 0 { z_i[a5] ^= pwa; }
@@ -234,25 +258,31 @@ impl<const N: usize> Stab<N> {
                 && x_i[b5] & pwb == 0 && z_i[a5] & pwa == 0
             { *r_i = (*r_i + 2) % 4; }
         }
-        // for i in 0..2 * N {
-        //     if self.x[[i, a5]] & pwa != 0 { self.x[[i, b5]] ^= pwb; }
-        //     if self.z[[i, b5]] & pwb != 0 { self.z[[i, a5]] ^= pwa; }
-        //     if self.x[[i, a5]] & pwa != 0 && self.z[[i, b5]] & pwb != 0
-        //         && self.x[[i, b5]] & pwb != 0 && self.z[[i, a5]] & pwa != 0
-        //     { self.r[i] = (self.r[i] + 2) % 4; }
-        //     if self.x[[i, a5]] & pwa != 0 && self.z[[i, b5]] & pwb != 0
-        //         && self.x[[i, b5]] & pwb == 0 && self.z[[i, a5]] & pwa == 0
-        //     { self.r[i] = (self.r[i] + 2) % 4; }
-        // }
         self
     }
 
+    /// Apply a CZ gate to the `a`-th and `b`-th qubits.
     pub fn apply_cz(&mut self, a: usize, b: usize) -> &mut Self {
-        self.apply_h(b).apply_cnot(a, b).apply_h(b)
+        if a >= self.n || b >= self.n || a == b { return self; }
+        self.apply_cz_unchecked(a, b)
     }
 
+    fn apply_cz_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
+        self.apply_h_unchecked(b)
+            .apply_cnot_unchecked(a, b)
+            .apply_h_unchecked(b)
+    }
+
+    /// Apply a SWAP gate to the `a`-th and `b`-th qubits.
     pub fn apply_swap(&mut self, a: usize, b: usize) -> &mut Self {
-        self.apply_cnot(a, b).apply_cnot(b, a).apply_cnot(a, b)
+        if a >= self.n || b >= self.n || a == b { return self; }
+        self.apply_swap_unchecked(a, b)
+    }
+
+    fn apply_swap_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
+        self.apply_cnot_unchecked(a, b)
+            .apply_cnot_unchecked(b, a)
+            .apply_cnot_unchecked(a, b)
     }
 
     /// Perform the action of a gate.
@@ -260,14 +290,17 @@ impl<const N: usize> Stab<N> {
     /// Does nothing if any qubit indices are out of bounds.
     pub fn apply_gate(&mut self, gate: Gate) -> &mut Self {
         match gate {
-            Gate::H(k) if k < N => self.apply_h(k),
-            Gate::X(k) if k < N => self.apply_x(k),
-            Gate::Y(k) if k < N => self.apply_y(k),
-            Gate::Z(k) if k < N => self.apply_z(k),
-            Gate::S(k) if k < N => self.apply_s(k),
-            Gate::CX(a, b) if a < N && b < N => self.apply_cnot(a, b),
-            Gate::CZ(a, b) if a < N && b < N => self.apply_cz(a, b),
-            Gate::Swap(a, b) if a < N && b < N => self.apply_swap(a, b),
+            Gate::H(k) if k < self.n => self.apply_h_unchecked(k),
+            Gate::X(k) if k < self.n => self.apply_x_unchecked(k),
+            Gate::Y(k) if k < self.n => self.apply_y_unchecked(k),
+            Gate::Z(k) if k < self.n => self.apply_z_unchecked(k),
+            Gate::S(k) if k < self.n => self.apply_s_unchecked(k),
+            Gate::CX(a, b) if a < self.n && b < self.n && a != b
+                => self.apply_cnot_unchecked(a, b),
+            Gate::CZ(a, b) if a < self.n && b < self.n && a != b
+                => self.apply_cz_unchecked(a, b),
+            Gate::Swap(a, b) if a < self.n && b < self.n && a != b
+                => self.apply_swap_unchecked(a, b),
             _ => self,
         }
     }
@@ -289,19 +322,16 @@ impl<const N: usize> Stab<N> {
             x__j[b] = x__j[a];
             z__j[b] = z__j[a];
         }
-        // for j in 0..self.over32 {
-        //     self.x[[b, j]] = self.x[[a, j]];
-        //     self.z[[b, j]] = self.z[[a, j]];
-        // }
         self.r[b] = self.r[a];
         self
     }
 
     pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
+        let n = self.n;
         // swap rows a and b
-        self.row_copy(b, 2 * N)
+        self.row_copy(b, 2 * n)
             .row_copy(a, b)
-            .row_copy(2 * N, a)
+            .row_copy(2 * n, a)
     }
 
     // set row k equal to the o-th observable (X_1, ... X_n, Z_1, ..., Z_n)
@@ -311,13 +341,13 @@ impl<const N: usize> Stab<N> {
         self.x.slice_mut(nd::s![k, ..]).fill(0);
         self.z.slice_mut(nd::s![k, ..]).fill(0);
         self.r[k] = 0;
-        if o < N {
+        if o < self.n {
             o5 = o >> 5;
             o31 = o & 31;
             self.x[[k, o5]] = PW[o31];
         } else {
-            o5 = (o - N) >> 5;
-            o31 = (o - N) & 31;
+            o5 = (o - self.n) >> 5;
+            o31 = (o - self.n) & 31;
             self.z[[k, o5]] = PW[o31];
         }
         self
@@ -348,34 +378,6 @@ impl<const N: usize> Stab<N> {
                 }
             }
         }
-        // for j in 0..self.over32 {
-        //     for &pw in PW.iter() {
-        //         if self.x[[a, j]] & pw != 0 && self.z[[a, j]] & pw == 0 {
-        //             if self.x[[b, j]] & pw != 0 && self.z[[b, j]] & pw != 0 {
-        //                 e += 1;
-        //             }
-        //             if self.x[[b, j]] & pw == 0 && self.z[[b, j]] & pw != 0 {
-        //                 e -= 1;
-        //             }
-        //         }
-        //         if self.x[[a, j]] & pw != 0 && self.z[[a, j]] & pw != 0 {
-        //             if self.x[[b, j]] & pw == 0 && self.z[[b, j]] & pw != 0 {
-        //                 e += 1;
-        //             }
-        //             if self.x[[b, j]] & pw != 0 && self.z[[b, j]] & pw == 0 {
-        //                 e -= 1;
-        //             }
-        //         }
-        //         if self.x[[a, j]] & pw == 0 && self.z[[a, j]] & pw != 0 {
-        //             if self.x[[b, j]] & pw != 0 && self.z[[b, j]] & pw == 0 {
-        //                 e += 1;
-        //             }
-        //             if self.x[[b, j]] & pw != 0 && self.z[[b, j]] & pw != 0 {
-        //                 e -= 1;
-        //             }
-        //         }
-        //     }
-        // }
         e = (e + i32::from(self.r[b]) + i32::from(self.r[a])).rem_euclid(4);
         e as u8
     }
@@ -390,10 +392,6 @@ impl<const N: usize> Stab<N> {
             x__j[b] ^= x__j[a];
             z__j[b] ^= z__j[a];
         }
-        // for j in 0..self.over32 {
-        //     self.x[[b, j]] ^= self.x[[a, j]];
-        //     self.z[[b, j]] ^= self.z[[a, j]];
-        // }
         self
     }
 
@@ -414,8 +412,8 @@ impl<const N: usize> Stab<N> {
 
         for (q, x_qpN_k5) in
             self.x.slice(nd::s![.., k5]).iter()
-                .take(2 * N)
-                .skip(N)
+                .take(2 * self.n)
+                .skip(self.n)
                 .enumerate()
         {
             rnd = *x_qpN_k5 & pw != 0;
@@ -423,13 +421,13 @@ impl<const N: usize> Stab<N> {
         }
 
         if rnd {
-            self.row_copy(p + N, p);
-            self.row_set(k + N, p + N);
-            self.r[p + N] = 2 * u8::from(rng.gen::<bool>());
-            for i in 0..2 * N {
+            self.row_copy(p + self.n, p);
+            self.row_set(k + self.n, p + self.n);
+            self.r[p + self.n] = 2 * u8::from(rng.gen::<bool>());
+            for i in 0..2 * self.n {
                 if i != p && self.x[[i, k5]] & pw != 0 { self.row_mul(p, i); }
             }
-            if self.r[p + N] != 0 {
+            if self.r[p + self.n] != 0 {
                 Outcome::Rand1
             } else {
                 Outcome::Rand0
@@ -437,16 +435,16 @@ impl<const N: usize> Stab<N> {
         } else {
             for (q, x_q_k5) in
                 self.x.slice(nd::s![.., k5]).iter()
-                    .take(N)
+                    .take(self.n)
                     .enumerate()
             {
                 if x_q_k5 & pw != 0 { m = q; break; }
             }
-            self.row_copy(m + N, 2 * N);
-            for i in m + 1..N {
-                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + N, 2 * N); }
+            self.row_copy(m + self.n, 2 * self.n);
+            for i in m + 1..self.n {
+                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + self.n, 2 * self.n); }
             }
-            if self.r[2 * N] != 0 {
+            if self.r[2 * self.n] != 0 {
                 Outcome::Det1
             } else {
                 Outcome::Det0
@@ -459,7 +457,7 @@ impl<const N: usize> Stab<N> {
     ///
     /// The tradeoff is that if the desired outcome is incompatible with `self`,
     /// the `self` must be invalidated. This method therefore consumes `self`,
-    /// returning it as an [`Ok`] if the post-selection was valid and [`Err`]
+    /// returning it as a [`Ok`] if the post-selection was valid and [`Err`]
     /// otherwise.
     pub fn measure_postsel(mut self, k: usize, postsel: Postsel)
         -> Result<Self, Box<Self>>
@@ -472,8 +470,8 @@ impl<const N: usize> Stab<N> {
 
         for (q, x_qpN_k5) in
             self.x.slice(nd::s![.., k5]).iter()
-                .take(2 * N)
-                .skip(N)
+                .take(2 * self.n)
+                .skip(self.n)
                 .enumerate()
         {
             rnd = *x_qpN_k5 & pw != 0;
@@ -481,26 +479,26 @@ impl<const N: usize> Stab<N> {
         }
 
         if rnd {
-            self.row_copy(p + N, p);
-            self.row_set(k + N, p + N);
-            self.r[p + N] = 2 * postsel as u8;
-            for i in 0..2 * N {
+            self.row_copy(p + self.n, p);
+            self.row_set(k + self.n, p + self.n);
+            self.r[p + self.n] = 2 * postsel as u8;
+            for i in 0..2 * self.n {
                 if i != p && self.x[[i, k5]] & pw != 0 { self.row_mul(p, i); }
             }
             Ok(self)
         } else {
             for (q, x_q_k5) in
                 self.x.slice(nd::s![.., k5]).iter()
-                    .take(N)
+                    .take(self.n)
                     .enumerate()
             {
                 if x_q_k5 & pw != 0 { m = q; break; }
             }
-            self.row_copy(m + N, 2 * N);
-            for i in m + 1..N {
-                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + N, 2 * N); }
+            self.row_copy(m + self.n, 2 * self.n);
+            for i in m + 1..self.n {
+                if self.x[[i, k5]] & pw != 0 { self.row_mul(i + self.n, 2 * self.n); }
             }
-            match (self.r[2 * N] != 0, postsel) {
+            match (self.r[2 * self.n] != 0, postsel) {
                 (true,  Postsel::One ) => Ok(self),
                 (false, Postsel::Zero) => Ok(self),
                 _ => Err(self.into()),
@@ -509,27 +507,26 @@ impl<const N: usize> Stab<N> {
     }
 
     /// Convert `self` to a more human-readable stabilizer/destabilizer group
-    /// generator representation.
-    pub fn as_group(&self) -> StabGroup<N> {
+    /// representation.
+    pub fn as_group(&self) -> StabGroup {
         let mut j5: usize;
         let mut pw: u32;
-        let npauli: NPauli<N>
-            = NPauli { phase: Phase::Pi0, ops: [Pauli::I; N] };
-        let mut stab: [NPauli<N>; N] = [npauli; N];
-        let mut destab: [NPauli<N>; N] = [npauli; N];
+        let mut npauli: NPauli
+            = NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
+        let mut stab: Vec<NPauli> = vec![npauli.clone(); self.n];
+        let mut destab: Vec<NPauli> = vec![npauli.clone(); self.n];
         let iter
             = self.row_iter()
-            .zip(destab.iter_mut().chain(stab.iter_mut()));
+            .zip(stab.iter_mut().chain(destab.iter_mut()));
         for (((xi, zi), ri), g) in iter {
-            g.phase
+            npauli.phase
                 = match ri[()] {
                     0 => Phase::Pi0,
                     1 => Phase::Pi1h,
-                    2 => Phase::Pi,
-                    3 => Phase::Pi3h,
+                    2 => Phase::Pi3h,
                     _ => unreachable!(),
                 };
-            for (j, op) in g.ops.iter_mut().enumerate() {
+            for (j, op) in npauli.ops.iter_mut().enumerate() {
                 j5 = j >> 5;
                 pw = PW[j & 31];
                 if xi[j5] & pw == 0 && zi[j5] & pw == 0 { *op = Pauli::I; }
@@ -537,6 +534,7 @@ impl<const N: usize> Stab<N> {
                 if xi[j5] & pw != 0 && zi[j5] & pw != 0 { *op = Pauli::Y; }
                 if xi[j5] & pw == 0 && zi[j5] & pw != 0 { *op = Pauli::Z; }
             }
+            *g = npauli.clone();
         }
         StabGroup { stab, destab }
     }
@@ -561,83 +559,43 @@ impl<const N: usize> Stab<N> {
     pub fn as_tableau(&self) -> (nd::Array2<u8>, nd::Array1<u8>) {
         let mut j5: usize;
         let mut pw: u32;
-        let mut tab: nd::Array2<u8> = nd::Array2::zeros((N, 2 * N));
-        let ph: nd::Array1<u8> = self.r.slice(nd::s![..N]).to_owned();
+        let mut tab: nd::Array2<u8> = nd::Array2::zeros((self.n, 2 * self.n));
+        let ph: nd::Array1<u8> = self.r.slice(nd::s![..self.n]).to_owned();
         for ((xi, zi), mut ti) in
             self.x.axis_iter(nd::Axis(0))
             .zip(self.z.axis_iter(nd::Axis(0)))
             .zip(tab.axis_iter_mut(nd::Axis(0)))
         {
-            for j in N..2 * N {
+            for j in 0..self.n {
                 j5 = j >> 5;
                 pw = PW[j & 31];
                 ti[j] = (xi[j5] & pw).try_into().unwrap();
-                ti[N + j] = (zi[j5] & pw).try_into().unwrap();
+                ti[self.n + j] = (zi[j5] & pw).try_into().unwrap();
             }
         }
         (tab, ph)
     }
 
     // like `as_tableau`, but outputting f32s for entanglement entropy
-    // calculations via matrix rank via SVD, and without the phases
+    // calculations via matrix rank via SV, and without the phases
     fn as_tableau_f32(&self) -> nd::Array2<f32> {
         let mut j5: usize;
         let mut pw: u32;
-        let mut tab: nd::Array2<f32> = nd::Array2::zeros((N, 2 * N));
+        let mut tab: nd::Array2<f32> = nd::Array2::zeros((self.n, 2 * self.n));
         for ((xi, zi), mut ti) in
             self.x.axis_iter(nd::Axis(0))
             .zip(self.z.axis_iter(nd::Axis(0)))
             .zip(tab.axis_iter_mut(nd::Axis(0)))
         {
-            for j in N..2 * N {
+            for j in 0..self.n {
                 j5 = j >> 5;
                 pw = PW[j & 31];
                 ti[j] = (xi[j5] & pw) as f32;
-                ti[N + j] = (zi[j5] & pw) as f32;
+                ti[self.n + j] = (zi[j5] & pw) as f32;
             }
         }
         tab
     }
-
-    // // calculate entanglement entropy across a single bipartition with `cut` on
-    // // one side and `N - cut` qubits on the other
-    // //
-    // // this calculation does so by isolating all columns in a bare tableau
-    // // belonging to the first `cut` or last `N - cut` (whichever is smaller) and
-    // // finding the rank of the resulting binary matrix via SVD. this works
-    // // because for stabilizer states, the Rényi entropy (a common measure of
-    // // entanglement entropy) is independent of its index and can be written in
-    // // this simpler form.
-    // fn do_entanglement_entropy(
-    //     tab: &nd::Array2<f32>, // shape N x 2N
-    //     subtab: &mut nd::Array2<f32>, // shape N x N
-    //     cut: usize,
-    // ) -> f32
-    // {
-    //     let n = cut.min(N - cut);
-    //     if cut <= N / 2 {
-    //         subtab.slice_mut(nd::s![.., ..n])
-    //             .assign(&tab.slice(nd::s![.., ..cut]));
-    //         subtab.slice_mut(nd::s![.., n..2 * n])
-    //             .assign(&tab.slice(nd::s![.., N..N + cut]));
-    //     } else {
-    //         subtab.slice_mut(nd::s![.., ..n])
-    //             .assign(&tab.slice(nd::s![.., cut..N]));
-    //         subtab.slice_mut(nd::s![.., n..2 * n])
-    //             .assign(&tab.slice(nd::s![.., N + cut..]));
-    //     }
-    //     let (_, s, _): (_, nd::Array1<f32>, _)
-    //         = subtab.slice(nd::s![.., ..2 * n]).svd(false, false).unwrap();
-    //     let smax: f32
-    //         = s.iter()
-    //         .max_by(|l, r| {
-    //             l.partial_cmp(r).unwrap_or(std::cmp::Ordering::Greater)
-    //         })
-    //         .copied()
-    //         .unwrap();
-    //     let eps: f32 = smax * (N as f32) * f32::EPSILON;
-    //     s.into_iter().filter(|sk| *sk > eps).count() as f32 //- n as f32
-    // }
 
     /// Calculate the entanglement entropy of the state as the average over all
     /// bipartitions.
@@ -649,27 +607,26 @@ impl<const N: usize> Stab<N> {
     /// [arxiv2]: https://arxiv.org/abs/1608.06950
     /// [stackex]: https://quantumcomputing.stackexchange.com/questions/16718/measuring-entanglement-entropy-using-a-stabilizer-circuit-simulator
     pub fn entanglement_entropy(&self) -> f32 {
-        (1..N - 1)
+        (1..self.n - 1)
             .map(|cut| {
-                self.entanglement_entropy_single(Some(cut)) / (N - 1) as f32
+                self.entanglement_entropy_single(Some(cut)) / (self.n - 1) as f32
             })
             .sum()
     }
 
     /// Calculate the entanglement entropy of the state across only a single
-    /// bipartition placed at `cut`, defaulting to `floor(N / 2)`.
+    /// bipartition placed at `cut`, defaulting to `floor(n / 2)`.
     ///
     /// See also [`Self::entanglement_entropy`].
     pub fn entanglement_entropy_single(&self, cut: Option<usize>) -> f32 {
         let mut j5 = 0;
         let mut pw = 0;
-        let cut = cut.unwrap_or(N / 2).min(N - 1);
-        if cut <= N / 2 {
+        let cut = cut.unwrap_or(self.n / 2).min(self.n - 1);
+        if cut <= self.n / 2 {
             let n
                 = self.x.axis_iter(nd::Axis(0))
                 .zip(self.z.axis_iter(nd::Axis(0)))
-                .skip(N)
-                .take(N)
+                .take(self.n)
                 .filter(|(xi, zi)| {
                     (0..cut).all(|j| {
                         j5 = j >> 5;
@@ -678,15 +635,14 @@ impl<const N: usize> Stab<N> {
                     })
                 })
                 .count() as f32;
-            (N - cut) as f32 - n
+            (self.n - cut) as f32 - n
         } else {
             let n
                 = self.x.axis_iter(nd::Axis(0))
                 .zip(self.z.axis_iter(nd::Axis(0)))
-                .skip(N)
-                .take(N)
+                .take(self.n)
                 .filter(|(xi, zi)| {
-                    (cut..N).all(|j| {
+                    (cut..self.n).all(|j| {
                         j5 = j >> 5;
                         pw = PW[j & 31];
                         xi[j5] & pw == 0 && zi[j5] & pw == 0
@@ -710,38 +666,38 @@ impl<const N: usize> Stab<N> {
         let mut j5: usize;
         let mut pw: u32;
         let mut maybe_k: Option<usize>;
-        let mut i: usize = N;
-        for j in 0..N {
+        let mut i: usize = self.n;
+        for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            maybe_k = (i..2 * N).find(|q| self.x[[*q, j5]] & pw != 0);
+            maybe_k = (i..2 * self.n).find(|q| self.x[[*q, j5]] & pw != 0);
             if let Some(k) = maybe_k {
-                if k < 2 * N {
+                if k < 2 * self.n {
                     self.row_swap(k, i);
-                    self.row_swap(k - N, i - N);
-                    for k2 in i + 1..2 * N {
+                    self.row_swap(k - self.n, i - self.n);
+                    for k2 in i + 1..2 * self.n {
                         if self.x[[k2, j5]] & pw != 0 {
                             self.row_mul(i, k2);
-                            self.row_mul(k2 - N, i - N);
+                            self.row_mul(k2 - self.n, i - self.n);
                         }
                     }
                     i += 1;
                 }
             }
         }
-        let g: usize = i - N;
-        for j in 0..N {
+        let g: usize = i - self.n;
+        for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            maybe_k = (i..2 * N).find(|q| self.z[[*q, j5]] & pw != 0);
+            maybe_k = (i..2 * self.n).find(|q| self.z[[*q, j5]] & pw != 0);
             if let Some(k) = maybe_k {
-                if k < 2 * N {
+                if k < 2 * self.n {
                     self.row_swap(k, i);
-                    self.row_swap(k - N, i - N);
-                    for k2 in i + 1..2 * N {
+                    self.row_swap(k - self.n, i - self.n);
+                    for k2 in i + 1..2 * self.n {
                         if self.z[[k2, j5]] & pw != 0 {
                             self.row_mul(i, k2);
-                            self.row_mul(k2 - N, i - N);
+                            self.row_mul(k2 - self.n, i - self.n);
                         }
                     }
                     i += 1;
@@ -757,43 +713,43 @@ impl<const N: usize> Stab<N> {
     // self.gaussian_elim should be called before this method (and its output
     // should be provided as argument)
     fn seed_scratch(&mut self, g: usize) {
-        self.r[2 * N] = 0;
-        self.x.slice_mut(nd::s![2 * N, ..]).fill(0);
-        self.z.slice_mut(nd::s![2 * N, ..]).fill(0);
+        self.r[2 * self.n] = 0;
+        self.x.slice_mut(nd::s![2 * self.n, ..]).fill(0);
+        self.z.slice_mut(nd::s![2 * self.n, ..]).fill(0);
 
         let mut f: u8;
         let mut j5: usize;
         let mut pw: u32;
         let mut min: usize = 0;
-        for i in (N + g..2 * N).rev() {
+        for i in (self.n + g..2 * self.n).rev() {
             f = self.r[i];
-            for j in (0..N).rev() {
+            for j in (0..self.n).rev() {
                 j5 = j >> 5;
                 pw = PW[j & 31];
                 if self.z[[i, j5]] & pw != 0 {
                     min = j;
-                    if self.x[[2 * N, j5]] & pw != 0 { f = (f + 2) % 4; }
+                    if self.x[[2 * self.n, j5]] & pw != 0 { f = (f + 2) % 4; }
                 }
             }
             if f % 4 == 2 {
                 j5 = min >> 5;
                 pw = PW[min & 31];
-                self.x[[2 * N, j5]] ^= pw;
+                self.x[[2 * self.n, j5]] ^= pw;
             }
         }
     }
 
     // returns the result of applying the Pauli operator in the scratch row to
     // |0...0> as a basis state
-    fn as_basis_state(&self) -> BasisState<N> {
+    fn as_basis_state(&self) -> BasisState {
         let mut j5: usize;
         let mut pw: u32;
-        let mut e: u8 = self.r[2 * N];
+        let mut e: u8 = self.r[2 * self.n];
 
-        for j in 0..N {
+        for j in 0..self.n {
             j5 = j >> 5;
             pw = PW[j & 31];
-            if self.x[[2 * N, j5]] & pw != 0 && self.z[[2 * N, j5]] & pw != 0 {
+            if self.x[[2 * self.n, j5]] & pw != 0 && self.z[[2 * self.n, j5]] & pw != 0 {
                 e = (e + 1) % 4;
             }
         }
@@ -805,11 +761,11 @@ impl<const N: usize> Stab<N> {
                 3 => Phase::Pi3h,
                 _ => unreachable!(),
             };
-        let mut state: [Qubit; N] = [Qubit::Zero; N];
+        let mut state: Vec<Qubit> = vec![Qubit::Zero; self.n];
         for (j, b) in state.iter_mut().enumerate() {
             j5 = j >> 5;
             pw = PW[j & 31];
-            if self.x[[2 * N, j5]] & pw != 0 { *b = Qubit::One; }
+            if self.x[[2 * self.n, j5]] & pw != 0 { *b = Qubit::One; }
         }
         BasisState { phase, state }
     }
@@ -819,10 +775,10 @@ impl<const N: usize> Stab<N> {
     ///
     /// Fails if the number of non-zero terms in the representation is greater
     /// than 2^31.
-    pub fn as_kets(&mut self) -> Option<State<N>> {
+    pub fn as_kets(&mut self) -> Option<State> {
         let g = self.gaussian_elim();
         if g > 31 { return None; }
-        let mut acc: Vec<BasisState<N>>
+        let mut acc: Vec<BasisState>
             = Vec::with_capacity(2_usize.pow(g as u32));
         self.seed_scratch(g);
         acc.push(self.as_basis_state());
@@ -830,7 +786,7 @@ impl<const N: usize> Stab<N> {
         for t in 0..PW[g] - 1 {
             t2 = t ^ (t + 1);
             for (i, pw) in PW.iter().enumerate().take(g) {
-                if t2 & pw != 0 { self.row_mul(N + i, 2 * N); }
+                if t2 & pw != 0 { self.row_mul(self.n + i, 2 * self.n); }
             }
             acc.push(self.as_basis_state());
         }
@@ -838,18 +794,18 @@ impl<const N: usize> Stab<N> {
     }
 }
 
-impl<const N: usize> From<Graph<N>> for Stab<N> {
-    fn from(graph: Graph<N>) -> Self { graph.to_stab() }
+impl From<Graph> for Stab {
+    fn from(graph: Graph) -> Self { graph.to_stab() }
 }
 
-/// A single `N`-qubit Pauli operator with a phase.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct NPauli<const N: usize> {
+/// A single `n`-qubit Pauli operator with a phase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NPauli {
     pub phase: Phase,
-    pub ops: [Pauli; N],
+    pub ops: Vec<Pauli>,
 }
 
-impl<const N: usize> fmt::Display for NPauli<N> {
+impl fmt::Display for NPauli {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.phase.fmt(f)?;
         write!(f, " ")?;
@@ -858,22 +814,23 @@ impl<const N: usize> fmt::Display for NPauli<N> {
     }
 }
 
-/// The complete `N`-qubit stabilizer/destabilizer groups for a given state.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct StabGroup<const N: usize> {
-    pub stab: [NPauli<N>; N],
-    pub destab: [NPauli<N>; N],
+/// The complete `n`-qubit stabilizer/destabilizer groups for a given state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StabGroup {
+    pub stab: Vec<NPauli>,
+    pub destab: Vec<NPauli>,
 }
 
-impl<const N: usize> fmt::Display for StabGroup<N> {
+impl fmt::Display for StabGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = self.stab.len();
         for (k, (stab, destab)) in
-            self.stab.iter().zip(self.destab).enumerate()
+            self.stab.iter().zip(&self.destab).enumerate()
         {
             stab.fmt(f)?;
             write!(f, " | ")?;
             destab.fmt(f)?;
-            if k < N - 1 { writeln!(f)?; }
+            if k < n - 1 { writeln!(f)?; }
         }
         Ok(())
     }
@@ -927,14 +884,14 @@ impl fmt::Display for Qubit {
     }
 }
 
-/// A single basis state in the product space of `N` qubits, with a phase.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct BasisState<const N: usize> {
+/// A single basis state in the product space of `n` qubits, with a phase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BasisState {
     pub phase: Phase,
-    pub state: [Qubit; N],
+    pub state: Vec<Qubit>,
 }
 
-impl<const N: usize> fmt::Display for BasisState<N> {
+impl fmt::Display for BasisState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.phase)?;
         write!(f, "∣")?;
@@ -948,9 +905,9 @@ impl<const N: usize> fmt::Display for BasisState<N> {
 ///
 /// All amplitudes are equal in magnitude.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct State<const N: usize>(pub Vec<BasisState<N>>);
+pub struct State(pub Vec<BasisState>);
 
-impl<const N: usize> fmt::Display for State<N> {
+impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let n = self.0.len();
         for (k, bs) in self.0.iter().enumerate() {
@@ -960,4 +917,5 @@ impl<const N: usize> fmt::Display for State<N> {
         Ok(())
     }
 }
+
 
