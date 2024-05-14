@@ -63,7 +63,9 @@ impl StabCircuit {
         (0..self.n).for_each(|k| {
             buf.push(Gate::sample_single(k, &mut self.rng));
         });
-        CNots::new(offs, self.n).for_each(|cx| { buf.push(cx); });
+        Pairs::new(offs, self.n).for_each(|(a, b)| {
+            buf.push(Gate::CX(a, b));
+        });
     }
 
     fn sample_gateset(
@@ -401,46 +403,6 @@ impl Iterator for Pairs {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().zip(self.iter.next())
-    }
-}
-
-struct CNots(Pairs);
-
-impl CNots {
-    fn new(offs: bool, stop: usize) -> Self { Self(Pairs::new(offs, stop)) }
-}
-
-impl Iterator for CNots {
-    type Item = Gate;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(a, b)| Gate::CX(a, b))
-    }
-}
-
-struct CZs(Pairs);
-
-impl CZs {
-    fn new(offs: bool, stop: usize) -> Self { Self(Pairs::new(offs, stop)) }
-}
-
-impl Iterator for CZs {
-    type Item = Gate;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(a, b)| Gate::CZ(a, b))
-    }
-}
-
-struct Q2s<'a, R>(Pairs, G2Set, &'a mut R);
-
-impl<'a, R> Iterator for Q2s<'a, R>
-where R: Rng
-{
-    type Item = Gate;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(a, b)| self.1.sample(a, b, self.2))
     }
 }
 
