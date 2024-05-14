@@ -153,7 +153,7 @@ impl Mul<Phase> for i8 {
 }
 
 /// Identifier for a single one-qubit gate.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum G1 {
     /// Hadamard
     H,
@@ -190,7 +190,7 @@ impl G1 {
 }
 
 /// Identifier for a single two-qubit gate.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum G2 {
     /// Z-controlled π rotation about X.
     CX,
@@ -212,7 +212,7 @@ impl G2 {
 }
 
 /// Identifier for a single gate.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum G {
     /// A one-qubit gate.
     Q1(G1),
@@ -261,6 +261,43 @@ impl G {
 
     /// Returns `true` if `self` is `Swap`.
     pub fn is_swap(&self) -> bool { matches!(self, Self::Q2(g) if g.is_swap()) }
+}
+
+/// Describes the general behavior for a gate identifier token, e.g. [`G1`] and
+/// [`G2`].
+pub trait GateToken {
+    /// Data required to construct a full [`Gate`].
+    type Arg;
+
+    /// Construct a [`Gate`].
+    fn make(&self, arg: Self::Arg) -> Gate;
+}
+
+impl GateToken for G1 {
+    type Arg = usize;
+
+    fn make(&self, arg: usize) -> Gate {
+        match *self {
+            Self::H => Gate::H(arg),
+            Self::X => Gate::X(arg),
+            Self::Y => Gate::Y(arg),
+            Self::Z => Gate::Z(arg),
+            Self::S => Gate::S(arg),
+            Self::SInv => Gate::SInv(arg),
+        }
+    }
+}
+
+impl GateToken for G2 {
+    type Arg = (usize, usize);
+
+    fn make(&self, arg: (usize, usize)) -> Gate {
+        match *self {
+            Self::CX => Gate::CX(arg.0, arg.1),
+            Self::CZ => Gate::CZ(arg.0, arg.1),
+            Self::Swap => Gate::Swap(arg.0, arg.1),
+        }
+    }
 }
 
 /// Description of a single gate for a register of `N` qubits.
@@ -350,6 +387,18 @@ impl Gate {
             5 => Self::SInv(idx),
             _ => unreachable!(),
         }
+    }
+
+    /// Sample a random gate uniformly from a set.
+    pub fn sample<'a, I, G, R>(kinds: I, arg: G::Arg, rng: &mut R) -> Self
+    where
+        I: IntoIterator<Item = &'a G>,
+        G: GateToken + 'a,
+        R: Rng + ?Sized
+    {
+        let kinds: Vec<&G> = kinds.into_iter().collect();
+        let n = kinds.len();
+        kinds[rng.gen_range(0..n)].make(arg)
     }
 }
 
@@ -483,10 +532,17 @@ impl Clifford {
         }
     }
 
+    /// Unpack `self` into a bare sequence of [`Gate`]s and the number of
+    /// qubits.
+    pub fn unpack(self) -> (Vec<Gate>, usize) { (self.0, self.1) }
+
+    /// Return the number of qubits.
     pub fn n(&self) -> usize { self.1 }
 
+    /// Return the number of gates.
     pub fn len(&self) -> usize { self.0.len() }
 
+    /// Return `true` if the number of gates is zero.
     pub fn is_empty(&self) -> bool { self.0.is_empty() }
 
     /// Generates a random element of the `n`-qubit Clifford group as a
