@@ -32,7 +32,7 @@ module Cliff.Tree
   , qS
   , Basis (..)
   , basisOutcomes
-  , Register (..)
+  , Register
   , regNew
   , regLength
   , regGet
