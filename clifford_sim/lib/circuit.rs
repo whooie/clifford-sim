@@ -372,6 +372,7 @@ impl StabCircuit {
             s = self.entropy();
             entropy.push(s);
             match depth_conf {
+                DepthConfig::Unlimited => { },
                 DepthConfig::Converge(tol) => {
                     check = (
                         2.0 * (sbar - s) / ((2 * d + 3) as f32 * sbar + s)
@@ -441,6 +442,9 @@ type FeedbackFn<'a> = Box<dyn FnMut(usize, f32, &[Option<Outcome>]) -> Feedback 
 /// Set the termination condition for a circuit.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum DepthConfig {
+    /// Run indefinitely. Only makes sense if using
+    /// [feedback][GateConfig::Feedback].
+    Unlimited,
     /// Run until the entanglement entropy converges on a steady-state value to
     /// within some tolerance (defaults to 10<sup>-4</sup>).
     ///
