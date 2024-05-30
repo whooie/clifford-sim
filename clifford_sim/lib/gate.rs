@@ -534,6 +534,7 @@ impl Clifford {
 
     /// Unpack `self` into a bare sequence of [`Gate`]s and the number of
     /// qubits.
+    #[inline]
     pub fn unpack(self) -> (Vec<Gate>, usize) { (self.0, self.1) }
 
     /// Return the number of qubits.
@@ -709,17 +710,20 @@ impl Tableau {
         self.tabx.iter().zip(self.tabz.iter())
     }
 
+    #[inline]
     fn h(&mut self, j: usize) {
         std::mem::swap(&mut self.tabx[j], &mut self.tabz[j]);
         self.circuit.push(Gate::H(j));
     }
 
+    #[inline]
     fn s(&mut self, j: usize) {
         self.tabz[j][0] ^= self.tabx[j][0];
         self.tabz[j][1] ^= self.tabx[j][1];
         self.circuit.push(Gate::S(j));
     }
 
+    #[inline]
     fn cnot(&mut self, c: usize, j: usize) {
         self.tabx[j][0] ^= self.tabx[c][0];
         self.tabx[j][1] ^= self.tabx[c][1];
@@ -728,6 +732,7 @@ impl Tableau {
         self.circuit.push(Gate::CX(c, j));
     }
 
+    #[inline]
     fn swap(&mut self, a: usize, b: usize) {
         self.tabx.swap(a, b);
         self.tabz.swap(a, b);

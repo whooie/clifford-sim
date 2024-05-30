@@ -26,49 +26,45 @@
 //! ```
 //! use clifford_sim::graph::Graph;
 //!
-//! const N: usize = 5; // number of qubits
+//! // initialize a totally disconnected graph state ∣+++++⟩
+//! let mut graph: Graph = Graph::new(5);
 //!
-//! fn main() {
-//!     // initialize a totally disconnected graph
-//!     let mut graph: Graph = Graph::new(N);
+//! // apply CZs to form the 5-qubit "star" state; this graph is locally
+//! // equivalent to the 5-qubit GHZ state
+//! graph.apply_cz(0, 1);
+//! graph.apply_cz(0, 2);
+//! graph.apply_cz(0, 3);
+//! graph.apply_cz(0, 4);
 //!
-//!     // apply CZs to form the 5-qubit "star" state; this graph is locally
-//!     // equivalent to the 5-qubit GHZ state
-//!     graph.apply_cz(0, 1);
-//!     graph.apply_cz(0, 2);
-//!     graph.apply_cz(0, 3);
-//!     graph.apply_cz(0, 4);
+//! // print out its stabilizers
+//! println!("{:#}", graph.stabilizers()); // `#` formatter suppresses identities
+//! // +1 XZZZZ
+//! // +1 ZX...
+//! // +1 Z.X..
+//! // +1 Z..X.
+//! // +1 Z...X
 //!
-//!     // print out its stabilizers
-//!     println!("{:#}", graph.stabilizers()); // `#` formatter suppresses identities
-//!     // +1 XZZZZ
-//!     // +1 ZX...
-//!     // +1 Z.X..
-//!     // +1 Z..X.
-//!     // +1 Z...X
+//! // convert to an ordinary stabilizer state
+//! let mut stab = graph.to_stab();
 //!
-//!     // convert to an ordinary stabilizer state
-//!     let mut stab = graph.to_stab();
+//! // apply Hadamards to convert the CZs above to CNOTs for the usual GHZ
+//! // preparation circuit
+//! stab.apply_h(1);
+//! stab.apply_h(2);
+//! stab.apply_h(3);
+//! stab.apply_h(4);
 //!
-//!     // apply Hadamards to convert the CZs above to CNOTs for the usual GHZ
-//!     // preparation circuit
-//!     stab.apply_h(1);
-//!     stab.apply_h(2);
-//!     stab.apply_h(3);
-//!     stab.apply_h(4);
+//! // print out the stabilizers and destabilizers
+//! println!("{:#}", stab.as_group());
+//! // +1 XXXXX | +1 Z....
+//! // +1 ZZ... | +1 .X...
+//! // +1 Z.Z.. | +1 ..X..
+//! // +1 Z..Z. | +1 ...X.
+//! // +1 Z...Z | +1 ....X
 //!
-//!     // print out the stabilizers and destabilizers
-//!     println!("{:#}", stab.as_group());
-//!     // +1 XXXXX | +1 Z....
-//!     // +1 ZZ... | +1 .X...
-//!     // +1 Z.Z.. | +1 ..X..
-//!     // +1 Z..Z. | +1 ...X.
-//!     // +1 Z...Z | +1 ....X
-//!
-//!     // convert to ket notation
-//!     println!("{}", stab.as_kets().unwrap());
-//!     // +1∣00000⟩ +1∣11111⟩
-//! }
+//! // convert to ket notation
+//! println!("{}", stab.as_kets().unwrap());
+//! // +1∣00000⟩ +1∣11111⟩
 //! ```
 //!
 //! [rohde]: https://peterrohde.org/an-introduction-to-graph-states/
@@ -137,8 +133,8 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Create a new, totally disconnected graph state of `n` qubits, indexed as
-    /// the integers `[0, n)`.
+    /// Create a new, totally disconnected graph state of `n` qubits initialized
+    /// to ∣+...+⟩, indexed as the integers `0..n`.
     pub fn new(n: usize) -> Self {
         Self { n, nodes: (0..n).collect(), edges: HashSet::default() }
     }
@@ -389,6 +385,7 @@ impl Graph {
         let mut graph = Self::new(stab.n);
         for (i, zi) in stab.z.row_iter().skip(stab.n).enumerate() {
             for j in 0..stab.n {
+                if j == i { continue; }
                 j5 = j >> 5;
                 pw = 1 << (j & 31);
                 if zi[j5] & pw != 0 { graph.add_edge_unchecked(i, j); }
@@ -417,10 +414,6 @@ impl Graph {
         // initial declarations
         let mut statements
             = StmtList::new()
-            .add_attr(
-                AttrType::Graph,
-                AttrList::new().add_pair(rankdir(RankDir::LR)),
-            )
             .add_attr(
                 AttrType::Node,
                 AttrList::new()

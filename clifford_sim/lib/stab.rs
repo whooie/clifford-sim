@@ -29,36 +29,33 @@
 //!
 //! The code in this module is pretty much a direct translation of Scott
 //! Aaronson's code (see [arXiv:quant-ph/0406196][tableau] for details on his
-//! extension and [here][chp] for his implementation) with some extra parts to
-//! handle the calculation of entanglement entropy, using methods from
-//! [arXiv:1901.08092][entropy1] and [arXiv:1608.09650][entropy2].
+//! extension and [here][chp] for his implementation).
+// with some extra parts to
+// handle the calculation of entanglement entropy, using methods from
+// [arXiv:1901.08092][entropy1] and [arXiv:1608.09650][entropy2].
 //!
 //! # Example
 //! ```
 //! use clifford_sim::{ stab::Stab, gate::Gate };
 //!
-//! const N: usize = 5; // number of qubits
+//! // initialize a new state to ∣00000⟩
+//! let mut stab = Stab::new(5);
 //!
-//! fn main() {
-//!     // initialize a new state to ∣00000⟩
-//!     let mut stab = Stab::new(N);
+//! // generate a Bell state on qubits 0, 1
+//! stab.apply_gate(Gate::H(0));
+//! stab.apply_gate(Gate::CX(0, 1));
 //!
-//!     // generate a Bell state on qubits 0, 1
-//!     stab.apply_gate(Gate::H(0));
-//!     stab.apply_gate(Gate::CX(0, 1));
+//! // print out the stabilizers and destabilizers
+//! println!("{:#}", stab.as_group()); // `#` formatter suppresses identities
+//! // +1 XX... | +1 Z....
+//! // +1 ZZ... | +1 .X...
+//! // +1 ..Z.. | +1 ..X..
+//! // +1 ...Z. | +1 ...X.
+//! // +1 ....Z | +1 ....X
 //!
-//!     // print out the stabilizers and destabilizers
-//!     println!("{:#}", stab.as_group()); // `#` formatter suppresses identities
-//!     // +1 XX... | +1 Z....
-//!     // +1 ZZ... | +1 .X...
-//!     // +1 ..Z.. | +1 ..X..
-//!     // +1 ...Z. | +1 ...X.
-//!     // +1 ....Z | +1 ....X
-//!
-//!     // convert to ket notation; fails if there are > 2^31 basis states
-//!     println!("{}", stab.as_kets().unwrap());
-//!     // +1∣00000⟩ +1∣11000⟩
-//! }
+//! // convert to ket notation; fails if there are > 2^31 basis states
+//! println!("{}", stab.as_kets().unwrap());
+//! // +1∣00000⟩ +1∣11000⟩
 //! ```
 //!
 //! [^1]: In their implementation, Aaronson and Gottesman also includes a single
@@ -66,12 +63,12 @@
 //!
 //! [tableau]: https://arxiv.org/abs/quant-ph/0406196
 //! [chp]: https://www.scottaaronson.com/chp/
-//! [entropy1]: https://arxiv.org/abs/1901.08092
-//! [entropy2]: https://arxiv.org/abs/1608.09650
+// [entropy1]: https://arxiv.org/abs/1901.08092
+// [entropy2]: https://arxiv.org/abs/1608.09650
 
 #![allow(unused_imports)]
 
-use std::fmt;
+use std::{ fmt, rc::Rc };
 use nalgebra as na;
 use rand::Rng;
 use crate::{
@@ -79,10 +76,16 @@ use crate::{
     graph::Graph,
 };
 
-const PW: [u32; 32] = [ // PW[i] = 2^i
-    1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
-    65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216,
-    33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648
+// PW[i] == 2^i
+const PW: [u32; 32] = [
+    0x00000001, 0x00000002, 0x00000004, 0x00000008,
+    0x00000010, 0x00000020, 0x00000040, 0x00000080,
+    0x00000100, 0x00000200, 0x00000400, 0x00000800,
+    0x00001000, 0x00002000, 0x00004000, 0x00008000,
+    0x00010000, 0x00020000, 0x00040000, 0x00080000,
+    0x00100000, 0x00200000, 0x00400000, 0x00800000,
+    0x01000000, 0x02000000, 0x04000000, 0x08000000,
+    0x10000000, 0x20000000, 0x40000000, 0x80000000,
 ];
 
 /// A stabilizer state of a finite register of qubits, identified by its
@@ -100,6 +103,7 @@ pub struct Stab {
 
 impl Stab {
     /// Create a new stabilizer state of size `n` initialized to ∣0...0⟩.
+    #[inline]
     pub fn new(n: usize) -> Self {
         let over32: usize = (n >> 5) + 1;
         let mut x: na::DMatrix<u32> = na::DMatrix::zeros(2 * n + 1, over32);
@@ -122,11 +126,13 @@ impl Stab {
     }
 
     /// Apply a Hadamard gate to the `k`-th qubit.
+    #[inline]
     pub fn apply_h(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_h_unchecked(k)
     }
 
+    #[inline]
     fn apply_h_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -146,11 +152,13 @@ impl Stab {
     }
 
     /// Apply an S gate (= Z(π/2)) to the `k`-th qubit.
+    #[inline]
     pub fn apply_s(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_s_unchecked(k)
     }
 
+    #[inline]
     fn apply_s_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -167,11 +175,13 @@ impl Stab {
     }
 
     /// Apply an S<sup>†</sup> gate (= Z(-π/2)) to the `k`-th qubit.
+    #[inline]
     pub fn apply_sinv(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_sinv_unchecked(k)
     }
 
+    #[inline]
     fn apply_sinv_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -188,11 +198,13 @@ impl Stab {
     }
 
     /// Apply X gate to the `k`-th qubit.
+    #[inline]
     pub fn apply_x(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_x_unchecked(k)
     }
 
+    #[inline]
     fn apply_x_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -207,11 +219,13 @@ impl Stab {
     }
 
     /// Apply an Y gate to the `k`-th qubit.
+    #[inline]
     pub fn apply_y(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_y_unchecked(k)
     }
 
+    #[inline]
     fn apply_y_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -229,11 +243,13 @@ impl Stab {
     }
 
     /// Apply an Z gate to the `k`-th qubit.
+    #[inline]
     pub fn apply_z(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_z_unchecked(k)
     }
 
+    #[inline]
     fn apply_z_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -248,11 +264,13 @@ impl Stab {
     }
 
     /// Apply a CNOT gate to the `b`-th qubit, with the `a`-th qubit as control.
+    #[inline]
     pub fn apply_cnot(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_cnot_unchecked(a, b)
     }
 
+    #[inline]
     fn apply_cnot_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
@@ -277,11 +295,13 @@ impl Stab {
     }
 
     /// Apply a CZ gate to the `a`-th and `b`-th qubits.
+    #[inline]
     pub fn apply_cz(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_cz_unchecked(a, b)
     }
 
+    #[inline]
     fn apply_cz_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
@@ -313,11 +333,13 @@ impl Stab {
     }
 
     /// Apply a SWAP gate to the `a`-th and `b`-th qubits.
+    #[inline]
     pub fn apply_swap(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_swap_unchecked(a, b)
     }
 
+    #[inline]
     fn apply_swap_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
@@ -341,6 +363,7 @@ impl Stab {
     /// Perform the action of a gate.
     ///
     /// Does nothing if any qubit indices are out of bounds.
+    #[inline]
     pub fn apply_gate(&mut self, gate: Gate) -> &mut Self {
         match gate {
             Gate::H(k) if k < self.n => self.apply_h_unchecked(k),
@@ -360,6 +383,7 @@ impl Stab {
     }
 
     /// Perform a series of gates.
+    #[inline]
     pub fn apply_circuit<'a, I>(&mut self, gates: I) -> &mut Self
     where I: IntoIterator<Item = &'a Gate>
     {
@@ -367,6 +391,7 @@ impl Stab {
         self
     }
 
+    #[inline]
     pub(crate) fn row_copy(&mut self, a: usize, b: usize) -> &mut Self {
         // set row b equal to row a
         for (mut x__j, mut z__j) in
@@ -381,6 +406,7 @@ impl Stab {
     }
 
     // swap rows a and b
+    #[inline]
     pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
         let n = self.n;
         self.row_copy(b, 2 * n)
@@ -389,6 +415,7 @@ impl Stab {
     }
 
     // set row k equal to the o-th observable (X_1, ..., X_n, Z_1, ..., Z_n)
+    #[inline]
     pub(crate) fn row_set(&mut self, o: usize, k: usize) -> &mut Self {
         let o5: usize;
         let o31: usize;
@@ -409,6 +436,7 @@ impl Stab {
 
     // return the phase (0, ..., 3) when row b's operator is left-multiplied by
     // row a's operator
+    #[inline]
     pub(crate) fn row_mul_phase(&self, a: usize, b: usize) -> u8 {
         let mut e: i32 = 0;
         let xa = self.x.row(a);
@@ -439,6 +467,7 @@ impl Stab {
 
     // left-multiply row b's operator by row a's operator and store the result
     // in row b
+    #[inline]
     pub(crate) fn row_mul(&mut self, a: usize, b: usize) -> &mut Self {
         self.r[b] = self.row_mul_phase(a, b);
         for (mut x__j, mut z__j) in
@@ -457,6 +486,7 @@ impl Stab {
     /// **Note**: this measurement is either deterministic (when the target
     /// qubit is ∣±z⟩) or random (otherwise). For post-selected measurements,
     /// see [`Self::measure_postsel`].
+    #[inline]
     pub fn measure<R>(&mut self, k: usize, rng: &mut R) -> Outcome
     where R: Rng + ?Sized
     {
@@ -510,6 +540,21 @@ impl Stab {
         }
     }
 
+    /// Like [`Self::measure`], but deterministically reset the qubit state to
+    /// ∣0⟩ after the measurement.
+    ///
+    /// The outcome of the original measurement is returned.
+    #[inline]
+    pub fn measure_reset<R>(&mut self, k: usize, rng: &mut R) -> Outcome
+    where R: Rng + ?Sized
+    {
+        let outcome = self.measure(k, rng);
+        if outcome == Outcome::Rand1 || outcome == Outcome::Det1 {
+            self.apply_x(k);
+        }
+        outcome
+    }
+
     /// Like [`Self::measure`], but deterministically post-selects on a desired
     /// measurement outcome.
     ///
@@ -517,6 +562,7 @@ impl Stab {
     /// the `self` must be invalidated. This method therefore consumes `self`,
     /// returning it as a [`Ok`] if the post-selection was valid and [`Err`]
     /// otherwise.
+    #[inline]
     pub fn measure_postsel(mut self, k: usize, postsel: Postsel)
         -> Result<Self, Box<Self>>
     {
@@ -586,7 +632,8 @@ impl Stab {
                 = match ri {
                     0 => Phase::Pi0,
                     1 => Phase::Pi1h,
-                    2 => Phase::Pi3h,
+                    2 => Phase::Pi,
+                    3 => Phase::Pi3h,
                     _ => unreachable!(),
                 };
             for (j, op) in npauli.ops.iter_mut().enumerate() {
@@ -660,61 +707,92 @@ impl Stab {
     //     tab
     // }
 
-    /// Calculate the entanglement entropy of the state as the average over all
-    /// bipartitions.
+    /// Calculate the entanglement entropy of the state in a given subsystem.
     ///
-    /// See equation A19 of [arXiv:1901.08092][arxiv1], footnote 11 of
-    /// [arXiv:1608.09650][arxiv2] and [this Stack Exchange thread][stackex].
-    ///
-    /// [arxiv1]: https://arxiv.org/abs/1901.08092
-    /// [arxiv2]: https://arxiv.org/abs/1608.06950
-    /// [stackex]: https://quantumcomputing.stackexchange.com/questions/16718/measuring-entanglement-entropy-using-a-stabilizer-circuit-simulator
-    pub fn entanglement_entropy(&self) -> f32 {
-        (1..self.n - 1)
-            .map(|cut| {
-                self.entanglement_entropy_single(Some(cut))
-                    / (self.n - 1) as f32
-            })
-            .sum()
-    }
-
-    /// Calculate the entanglement entropy of the state across only a single
-    /// bipartition placed at `cut`, defaulting to `floor(n / 2)`.
-    ///
-    /// See also [`Self::entanglement_entropy`].
-    pub fn entanglement_entropy_single(&self, cut: Option<usize>) -> f32 {
+    /// The partition defaults to the leftmost `floor(n / 2)` qubits.
+    #[inline]
+    pub fn entanglement_entropy(&self, part: Option<Partition>) -> f32 {
         let mut j5 = 0;
         let mut pw = 0;
-        let cut = cut.unwrap_or(self.n / 2).min(self.n - 1);
-        if cut <= self.n / 2 {
-            let n
-                = self.x.row_iter()
-                .zip(self.z.row_iter())
-                .take(self.n)
-                .filter(|(xi, zi)| {
-                    (0..cut).all(|j| {
+        let part = part.unwrap_or(Partition::Left(self.n / 2 - 1));
+        let n
+            = self.x.row_iter()
+            .zip(self.z.row_iter())
+            .skip(self.n)
+            .take(self.n)
+            .filter(|(xi, zi)| {
+                (0..self.n)
+                    .filter(|&j| !part.contains(j))
+                    .all(|j| {
                         j5 = j >> 5;
                         pw = PW[j & 31];
                         xi[j5] & pw == 0 && zi[j5] & pw == 0
                     })
-                })
-                .count() as f32;
-            (self.n - cut) as f32 - n
-        } else {
-            let n
-                = self.x.row_iter()
-                .zip(self.z.row_iter())
-                .take(self.n)
-                .filter(|(xi, zi)| {
-                    (cut..self.n).all(|j| {
-                        j5 = j >> 5;
-                        pw = PW[j & 31];
-                        xi[j5] & pw == 0 && zi[j5] & pw == 0
-                    })
-                })
-                .count() as f32;
-            cut as f32 - n
+            })
+            .count() as f32;
+        part.size(self.n) as f32 - n
+    }
+
+    /// Calculate the mutual information between two subsystems of a given size,
+    /// maximally spaced from each other around a periodic 1D chain.
+    ///
+    /// The subsystem size defaults to `floor(3 * n / 8)`.
+    ///
+    /// *Panics* if the subsystem size is greater than `floor(n / 2)`.
+    #[inline]
+    pub fn mutual_information(&self, size: Option<usize>) -> f32 {
+        let size = size.unwrap_or(3 * self.n / 8);
+        if size > self.n / 2 {
+            panic!(
+                "Stab::mutual_information: subsystem size must be less than \
+                floor(n/2)"
+            );
         }
+        let part_a = Partition::Left(size);
+        let part_b = Partition::Range(self.n / 2, self.n / 2 + size);
+
+        let mut cond_a: bool;
+        let mut n_a: usize = 0;
+        let mut cond_b: bool;
+        let mut n_b: usize = 0;
+        let mut cond_ab: bool;
+        let mut n_ab: usize = 0;
+        let mut j5 = 0;
+        let mut pw = 0;
+        for (xi, zi) in
+            self.x.row_iter()
+                .zip(self.z.row_iter())
+                .skip(self.n)
+                .take(self.n)
+        {
+            cond_a = (0..self.n)
+                .filter(|&j| !part_a.contains(j))
+                .all(|j| {
+                    j5 = j >> 5;
+                    pw = PW[j & 31];
+                    xi[j5] & pw == 0 && zi[j5] & pw == 0
+                });
+            if cond_a { n_a += 1; }
+
+            cond_b = (0..self.n)
+                .filter(|&j| !part_b.contains(j))
+                .all(|j| {
+                    j5 = j >> 5;
+                    pw = PW[j & 31];
+                    xi[j5] & pw == 0 && zi[j5] & pw == 0
+                });
+            if cond_b { n_b += 1; }
+
+            cond_ab = (0..self.n)
+                .filter(|&j| !part_a.contains(j) && !part_b.contains(j))
+                .all(|j| {
+                    j5 = j >> 5;
+                    pw = PW[j & 31];
+                    xi[j5] & pw == 0 && zi[j5] & pw == 0
+                });
+            if cond_ab { n_ab += 1; }
+        }
+        n_ab as f32 - n_a as f32 - n_b as f32
     }
 
     // do Gaussian elimination to put the stabilizer generators in the following
@@ -857,6 +935,130 @@ impl Stab {
             acc.push(self.as_basis_state());
         }
         Some(State(acc))
+    }
+}
+
+/// Describes a subset of a [`Stab`] (assumed as a linear chain with periodic
+/// boundary conditions) for which to calculate the entanglement entropy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Partition {
+    /// The leftmost `n` qubits.
+    Left(usize),
+    /// The rightmost `n` qubits.
+    Right(usize),
+    /// A contiguous range of qubit indices, beginning at the left argument and
+    /// ending (non-inclusively) at the right.
+    Range(usize, usize),
+    /// The union of two partitions.
+    Union(Rc<Partition>, Rc<Partition>),
+}
+
+impl Partition {
+    /// Return the intersection of two partitions.
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Self::Left(r1), Self::Left(r2))
+                => Some(Self::Left(*r1.min(r2))),
+            (Self::Left(r1), Self::Right(l2))
+                => (l2 < r1).then_some(Self::Range(*l2, *r1)),
+            (Self::Left(r1), Self::Range(l2, r2))
+                => if l2 >= r2 {
+                    None
+                } else if r2 <= r1 {
+                    Some(Self::Range(*l2, *r2))
+                } else if l2 < r1 {
+                    Some(Self::Range(*l2, *r1))
+                } else {
+                    None
+                },
+            (Self::Right(l1), Self::Left(r2))
+                => (l1 < r2).then_some(Self::Range(*l1, *r2)),
+            (Self::Right(l1), Self::Right(l2))
+                => Some(Self::Right(*l1.max(l2))),
+            (Self::Right(l1), Self::Range(l2, r2))
+                => if l2 >= r2 {
+                    None
+                } else if l1 <= l2 {
+                    Some(Self::Range(*l2, *r2))
+                } else if l1 < r2 {
+                    Some(Self::Range(*l1, *r2))
+                } else {
+                    None
+                },
+            (Self::Range(l1, r1), Self::Left(r2))
+                => if l1 >= r1 {
+                    None
+                } else if r1 <= r2 {
+                    Some(Self::Range(*l1, *r1))
+                } else if l1 < r2 {
+                    Some(Self::Range(*l1, *r2))
+                } else {
+                    None
+                },
+            (Self::Range(l1, r1), Self::Right(l2))
+                => if l1 >= r1 {
+                    None
+                } else if l2 <= l1 {
+                    Some(Self::Range(*l1, *r1))
+                } else if l2 < r1 {
+                    Some(Self::Range(*l2, *r1))
+                } else {
+                    None
+                },
+            (Self::Range(l1, r1), Self::Range(l2, r2))
+                => if l1 >= r1 || l2 >= r2 {
+                    None
+                } else if l1 <= l2 && r1 >= r2 {
+                    Some(Self::Range(*l2, *r2))
+                } else if l2 <= l1 && r2 >= r1 {
+                    Some(Self::Range(*l1, *r1))
+                } else if r1 > l2 {
+                    Some(Self::Range(*l2, *r1))
+                } else if r2 > l1 {
+                    Some(Self::Range(*l1, *r2))
+                } else {
+                    None
+                },
+            (_, Self::Union(ul, ur))
+                => match (self.intersection(ul), self.intersection(ur)) {
+                    (None, None) => None,
+                    (None, Some(r)) => Some(r),
+                    (Some(l), None) => Some(l),
+                    (Some(l), Some(r)) => Some(Self::Union(l.into(), r.into())),
+                },
+            (Self::Union(ul, ur), _)
+                => match (ul.intersection(other), ur.intersection(other)) {
+                    (None, None) => None,
+                    (None, Some(r)) => Some(r),
+                    (Some(l), None) => Some(l),
+                    (Some(l), Some(r)) => Some(Self::Union(l.into(), r.into())),
+                },
+        }
+    }
+
+    /// Return `true` if `self` contains `k`.
+    #[inline]
+    pub fn contains(&self, k: usize) -> bool {
+        match self {
+            Self::Left(r) => k < *r,
+            Self::Right(l) => *l <= k,
+            Self::Range(l, r) => *l <= k && k < *r,
+            Self::Union(l, r) => l.contains(k) || r.contains(k),
+        }
+    }
+
+    /// Returns the number of qubits contained in `self`, with consideration for
+    /// fixed total system size `n`.
+    #[inline]
+    pub fn size(&self, n: usize) -> usize {
+        match self {
+            Self::Left(r) => (*r).min(n),
+            Self::Right(l) => n.saturating_sub(*l),
+            Self::Range(l, r) => (*r).min(n).saturating_sub(*l),
+            Self::Union(l, r)
+                => l.size(n) + r.size(n)
+                - l.intersection(r).map(|ix| ix.size(n)).unwrap_or(0),
+        }
     }
 }
 

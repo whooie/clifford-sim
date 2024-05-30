@@ -5,7 +5,7 @@ use rand::{ rngs::StdRng, Rng, SeedableRng };
 use rustc_hash::FxHashSet as HashSet;
 use crate::{
     gate::{ Clifford, Gate, G1, G2 },
-    stab::{ Stab, Outcome },
+    stab::{ Outcome, Partition, Stab },
 };
 
 /// Type alias for [`HashSet`].
@@ -16,8 +16,7 @@ pub type Set<T> = HashSet<T>;
 #[derive(Clone, Debug)]
 pub struct StabCircuit {
     pub state: Stab,
-    pub p_meas: f32,
-    pub cut: Option<EntropyCut>,
+    pub part: Option<Partition>,
     n: usize,
     rng: StdRng,
 }
@@ -30,42 +29,48 @@ pub type MeasLayer = Vec<Option<Outcome>>;
 pub type MeasRecord = Vec<MeasLayer>;
 
 impl StabCircuit {
-    /// Create a new `StabCircuit` for a 1 chain of `n` qubits, with state
-    /// initialized to ∣0...0⟩ and no recorded outcomes.
+    /// Create a new `StabCircuit` for a 1D chain of `n` qubits, with state
+    /// initialized to ∣0...0⟩.
     ///
-    /// `p_meas` is the probability with which qubits are measured in the
-    /// Z-basis at each layer in the circuit. `cut` is the location in the chain
-    /// at which to place the bipartition for calculation of the entanglement
-    /// entropy, defaulting to a single cut at `floor(n / 2)`. Optionally also
-    /// seed the internal random number generator.
-    ///
-    /// *Panics if `meas_rate` is not a valid probability.*
+    /// `part` is the partition in which to calculate the entanglement entropy,
+    /// defaulting to a single cut at `floor(n / 2)`. Optionally also seed the
+    /// internal random number generator.
     pub fn new(
         n: usize,
-        p_meas: f32,
-        cut: Option<EntropyCut>,
+        part: Option<Partition>,
         seed: Option<u64>,
     ) -> Self
     {
-        if !(0.0..=1.0).contains(&p_meas) {
-            panic!("StabCircuit: measurement rate must be a valid probability");
-        }
         let rng
             = seed.map(StdRng::seed_from_u64)
             .unwrap_or_else(StdRng::from_entropy);
-        Self { state: Stab::new(n), p_meas, cut, n, rng }
+        Self { state: Stab::new(n), part, n, rng }
     }
 
     /// Return the number of qubits.
     pub fn n(&self) -> usize { self.n }
 
-    fn sample_simple(&mut self, offs: bool, buf: &mut Vec<Gate>) {
+    fn sample_simple(
+        &mut self,
+        offs: bool,
+        bounds: BoundaryConfig,
+        buf: &mut Vec<Gate>,
+    ) {
         (0..self.n).for_each(|k| {
             buf.push(Gate::sample_single(k, &mut self.rng));
         });
-        Pairs::new(offs, self.n).for_each(|(a, b)| {
-            buf.push(Gate::CX(a, b));
-        });
+        match bounds {
+            BoundaryConfig::Closed => {
+                Pairs::new(offs, self.n).for_each(|(a, b)| {
+                    buf.push(Gate::CX(a, b));
+                });
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, self.n).for_each(|(a, b)| {
+                    buf.push(Gate::CX(a, b));
+                });
+            },
+        }
     }
 
     fn sample_gateset(
@@ -73,261 +78,169 @@ impl StabCircuit {
         g1: &G1Set,
         g2: &G2Set,
         offs: bool,
+        bounds: BoundaryConfig,
         buf: &mut Vec<Gate>,
     ) {
         (0..self.n).for_each(|k| {
             buf.push(g1.sample(k, &mut self.rng));
         });
-        Pairs::new(offs, self.n).for_each(|(a, b)| {
-            buf.push(g2.sample(a, b, &mut self.rng));
-        });
+        match bounds {
+            BoundaryConfig::Closed => {
+                Pairs::new(offs, self.n).for_each(|(a, b)| {
+                    buf.push(g2.sample(a, b, &mut self.rng));
+                })
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, self.n).for_each(|(a, b)| {
+                    buf.push(g2.sample(a, b, &mut self.rng));
+                })
+            },
+        }
     }
 
-    fn measure(&mut self, buf: &mut [Option<Outcome>]) {
-        buf.iter_mut()
-            .enumerate()
-            .for_each(|(k, outk)| {
-                if self.rng.gen::<f32>() < self.p_meas {
-                    *outk = Some(self.state.measure(k, &mut self.rng));
-                } else {
-                    *outk = None;
-                }
-            });
+    fn measure(
+        &mut self,
+        d: usize,
+        config: MeasureConfig,
+        buf: &mut [Option<Outcome>]
+    ) -> bool
+    {
+        use MeasLayerConfig::*;
+        use MeasProbConfig::*;
+
+        enum Pred<'a> {
+            Never,
+            Always,
+            Prob(f32),
+            Func(Box<dyn Fn(usize) -> bool + 'a>),
+        }
+
+        fn do_measure(
+            circ: &mut StabCircuit,
+            pred: Pred,
+            buf: &mut [Option<Outcome>],
+        ) {
+            buf.iter_mut()
+                .enumerate()
+                .for_each(|(k, outk)| {
+                    match &pred {
+                        Pred::Never => {
+                            *outk = None;
+                        },
+                        Pred::Always => {
+                            *outk = Some(circ.state.measure(k, &mut circ.rng));
+                        },
+                        Pred::Prob(p) => {
+                            *outk = (circ.rng.gen::<f32>() < *p)
+                                .then(|| circ.state.measure(k, &mut circ.rng));
+                        },
+                        Pred::Func(f) => {
+                            *outk = f(k)
+                                .then(|| circ.state.measure(k, &mut circ.rng));
+                        },
+                    }
+                });
+        }
+
+        let MeasureConfig { layer, prob } = config;
+        match layer {
+            Every | Period(1) => {
+                let pred
+                    =  match prob {
+                        Random(p) => Pred::Prob(p),
+                        Cycling(0) => Pred::Never,
+                        Cycling(1) => Pred::Always,
+                        Cycling(n) => Pred::Func(
+                            Box::new(move |k| k % n == d % n)),
+                        Block(0) => Pred::Never,
+                        Block(b) => Pred::Func(
+                            Box::new(move |k| k / b == d % b)),
+                        Window(0) => Pred::Never,
+                        Window(w) => {
+                            let d = d as isize;
+                            let w = w as isize;
+                            let n = self.n as isize;
+                            Pred::Func(
+                                Box::new(move |k| {
+                                    (k as isize - d).rem_euclid(n) / w == 0
+                                })
+                            )
+                        }
+                    };
+                do_measure(self, pred, buf);
+                true
+            },
+            Period(m) if d % m == 0 => {
+                let pred
+                    = match prob {
+                        Random(p) => Pred::Prob(p),
+                        Cycling(0) => Pred::Never,
+                        Cycling(1) => Pred::Always,
+                        Cycling(n) => Pred::Func(
+                            Box::new(move |k| k % n == d % n)),
+                        Block(0) => Pred::Never,
+                        Block(b) => Pred::Func(
+                            Box::new(move |k| k / b == (d / m) % b)),
+                        Window(0) => Pred::Never,
+                        Window(w) => {
+                            let d = d as isize;
+                            let w = w as isize;
+                            let n = self.n as isize;
+                            let m = m as isize;
+                            Pred::Func(
+                                Box::new(move |k| {
+                                    (k as isize - d / m).rem_euclid(n) / w == 0
+                                })
+                            )
+                        },
+                    };
+                do_measure(self, pred, buf);
+                true
+            },
+            _ => {
+                buf.iter_mut().for_each(|outk| { *outk = None; });
+                false
+            },
+        }
     }
 
     fn entropy(&self) -> f32 {
-        match self.cut {
-            None
-                => self.state.entanglement_entropy_single(None),
-            Some(EntropyCut::Average)
-                => self.state.entanglement_entropy(),
-            Some(EntropyCut::Single(c))
-                => self.state.entanglement_entropy_single(Some(c)),
-        }
+        self.state.entanglement_entropy(self.part.clone())
     }
 
-    /// Run `depth` layers of a simple MIPT procedure.
-    ///
-    /// This procedure consists of the following at each layer in the circuit:
-    /// 1. Apply a random single-qubit rotation (*H*, *X*, *Y*, *Z*, *S*) to
-    /// each qubit
-    /// 1. Apply a CNOT to adjacent pairs of qubits, alternating between left
-    /// and right neighbors on each layer
-    /// 1. Perform a projective measurement on qubits with probability
-    /// `self.p_meas`
-    ///
-    /// Returns the entanglement entropy measured once before any operations
-    /// have been performed, and then after each round of measurements.
-    /// Optionally provide a mutable reference to a list of measurements to
-    /// record the outcomes from the circuit.
-    pub fn run_simple(
+    fn do_run(
         &mut self,
-        depth: usize,
+        config: &mut CircuitConfig,
         mut meas: Option<&mut MeasRecord>,
-    ) -> Vec<f32>
-    {
-        let mut gates: Vec<Gate> = Vec::new();
-        let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
-        let mut entropy: Vec<f32> = Vec::with_capacity(depth + 1);
-        entropy.push(self.entropy());
-        for d in 0..depth {
-            gates.clear();
-            self.sample_simple(d % 2 == 1, &mut gates);
-            self.state.apply_circuit(&gates);
+        mut entropy: Option<&mut Vec<f32>>,
+        mut mutinf: Option<(&mut Vec<f32>, Option<usize>)>,
+    ) {
+        let CircuitConfig {
+            depth: depth_conf,
+            gates: ref mut gate_conf,
+            boundaries: bound_conf,
+            measurement: meas_conf,
+        } = config;
+        let depth_conf = *depth_conf;
+        let bound_conf = *bound_conf;
+        let meas_conf = *meas_conf;
 
-            self.measure(&mut outcomes);
-            if let Some(record) = meas.as_mut() {
-                record.push(outcomes.clone());
-            }
-
-            entropy.push(self.entropy());
-        }
-        entropy
-    }
-
-    /// Lazy iterator version of [`Self::run_simple`].
-    pub fn run_simple_lazy<'a>(
-        &'a mut self,
-        depth: usize,
-        mut meas: Option<&'a mut MeasRecord>
-    ) -> impl Iterator<Item = f32> + '_
-    {
-        let mut gates: Vec<Gate> = Vec::new();
-        let mut outcomes: MeasLayer = vec![None; self.n];
-        let entropy_init = [self.entropy()].into_iter();
-        let entropy_iter
-            = (0..depth)
-            .map(move |d| {
-                gates.clear();
-                self.sample_simple(d % 2 == 1, &mut gates);
-                self.state.apply_circuit(&gates);
-
-                self.measure(&mut outcomes);
-                if let Some(record) = meas.as_mut() {
-                    record.push(outcomes.clone());
-                }
-                self.entropy()
-            });
-        entropy_init.chain(entropy_iter)
-    }
-
-    /// Like [`Self::run_simple`], but run the circuit until the entropy in the
-    /// system has converged to within `tol`, which defaults to 10<sup>-4</sup>.
-    ///
-    /// The criterion for convergence is
-    /// ```math
-    /// 2 \left| \frac{\mu_{k+1} - \mu_k}{\mu_{k+1} + \mu_k} \right| < \text{tol}
-    /// ```
-    /// where `$\mu_k$` is the running average of the first `$k$` entropy
-    /// measurement, including the first before the circuit has begun; i.e. the
-    /// entropy has reached a steady state when the absolute difference between
-    /// consecutive values of the running average divided by their mean is less
-    /// than `tol`.
-    pub fn run_simple_until_converged(
-        &mut self,
-        tol: Option<f32>,
-        mut meas: Option<&mut MeasRecord>,
-    ) -> Vec<f32>
-    {
-        let tol = tol.unwrap_or(1e-4);
-        let mut gates: Vec<Gate> = Vec::new();
-        let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
-        let mut entropy: Vec<f32> = Vec::new();
-        entropy.push(self.entropy());
-        let mut d: usize = 0;
-        let mut sbar: f32 = 0.0;
-        let mut s: f32;
-        let mut check: f32;
-        loop {
-            gates.clear();
-            self.sample_simple(d % 2 == 1, &mut gates);
-            self.state.apply_circuit(&gates);
-
-            self.measure(&mut outcomes);
-            if let Some(record) = meas.as_mut() {
-                record.push(outcomes.clone());
-            }
-
-            s = self.entropy();
-            entropy.push(s);
-            check = (2.0 * (sbar - s) / ((2 * d + 3) as f32 * sbar + s)).abs();
-            if check < tol {
-                break entropy;
-            }
-            sbar = (sbar * (d + 1) as f32 + s) / (d + 2) as f32;
-            d += 1;
-        }
-    }
-
-    /// Run a simple MIPT procedure with feedback on measurement outcomes.
-    ///
-    /// At each layer in the circuit, the previous layer's measurement outcomes
-    /// and state entropy are passed to the supplied closure along with the
-    /// current circuit depth to determine when to halt or what gates to apply.
-    /// For the first layer, no measurements have been performed and hence an
-    /// array of `None`s is passed to the closure. After gates are applied,
-    /// measurements are performed on each qubit with probability `self.p_meas`,
-    /// whose outcomes are then passed back to the closure.
-    ///
-    /// Returns the entanglement entropy measured once before the first layer,
-    /// and then after each round of measurements.
-    pub fn run_feedback<F>(
-        &mut self,
-        mut feedback: F,
-        mut meas: Option<&mut MeasRecord>,
-    ) -> Vec<f32>
-    where F: FnMut(usize, f32, &[Option<Outcome>]) -> Feedback
-    {
-        let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
-        let mut s: f32 = self.entropy();
-        let mut entropy: Vec<f32> = vec![s];
-        let mut gates: Vec<Gate> = Vec::new();
-        let mut d: usize = 0;
-        loop {
-            gates.clear();
-            match feedback(d, s, &outcomes) {
-                Feedback::Halt => { break entropy; },
-                Feedback::Simple => {
-                    self.sample_simple(d % 2 == 1, &mut gates);
-                    self.state.apply_circuit(&gates);
-                },
-                Feedback::Clifford => {
-                    let cliff = Clifford::gen(self.n, &mut self.rng);
-                    gates.append(&mut cliff.unpack().0);
-                    self.state.apply_circuit(&gates);
-                },
-                Feedback::GateSet(g1, g2) => {
-                    self.sample_gateset(&g1, &g2, d % 2 == 1, &mut gates);
-                    self.state.apply_circuit(&gates);
-                },
-                Feedback::Circuit(circ) => {
-                    self.state.apply_circuit(&circ);
-                },
-            }
-
-            self.measure(&mut outcomes);
-            if let Some(record) = meas.as_mut() {
-                record.push(outcomes.clone());
-            }
-
-            s = self.entropy();
-            entropy.push(s);
-            d += 1;
-        }
-    }
-
-    /// Run the MIPT procedure, replacing the unitary evolution between
-    /// measurements in the "simple" procedure with a random `n`-qubit Clifford
-    /// gate.
-    ///
-    /// Returns the entanglement entropy measured once before the first layer,
-    /// and then after each round of measurements.
-    pub fn run_clifford(
-        &mut self,
-        depth: usize,
-        mut meas: Option<&mut MeasRecord>,
-    ) -> Vec<f32>
-    {
-        let mut gates: Clifford;
-        let mut outcomes: Vec<Option<Outcome>> = vec![None; self.n];
-        let mut entropy: Vec<f32> = Vec::with_capacity(depth + 1);
-        entropy.push(self.entropy());
-        for _ in 0..depth {
-            gates = Clifford::gen(self.n, &mut self.rng);
-            self.state.apply_circuit(&gates);
-
-            self.measure(&mut outcomes);
-            if let Some(record) = meas.as_mut() {
-                record.push(outcomes.clone());
-            }
-
-            entropy.push(self.entropy());
-        }
-        entropy
-    }
-
-    /// Run the MIPT procedure for a general config.
-    ///
-    /// Returns the entanglement entropy measured once before the first layer,
-    /// and then after each round of measurements.
-    pub fn run<'a>(
-        &mut self,
-        config: CircuitConfig<'a>,
-        mut meas: Option<&mut MeasRecord>,
-    ) -> Vec<f32> {
-        let CircuitConfig { depth: depth_conf, gates: mut gate_conf } = config;
-        let mut gates: Vec<Gate> = Vec::new();
         let mut outcomes: MeasLayer = vec![None; self.n];
         let mut s: f32 = self.entropy();
-        let mut entropy: Vec<f32> = vec![s];
-        let mut d: usize = 0;
+        if let Some(rcd) = entropy.as_mut() { rcd.push(s); }
         let mut sbar: f32 = 0.0;
         let mut check: f32;
+        if let Some((rcd, part_size)) = mutinf.as_mut() {
+            rcd.push(self.state.mutual_information(*part_size));
+        }
+
+        let mut gates: Vec<Gate> = Vec::new();
+        let mut d: usize = 0;
         loop {
             gates.clear();
-            match &mut gate_conf {
+            match gate_conf {
                 GateConfig::Simple => {
-                    self.sample_simple(d % 2 == 1, &mut gates);
+                    self.sample_simple(d % 2 == 1, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
                 GateConfig::Clifford => {
@@ -335,18 +248,20 @@ impl StabCircuit {
                     gates.append(&mut cliff.unpack().0);
                     self.state.apply_circuit(&gates);
                 },
-                GateConfig::GateSet(g1, g2) => {
-                    self.sample_gateset(g1, g2, d % 2 == 1, &mut gates);
+                GateConfig::GateSet(ref g1, ref g2) => {
+                    self.sample_gateset(
+                        g1, g2, d % 2 == 1, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
-                GateConfig::Circuit(circ) => {
-                    self.state.apply_circuit(&*circ);
+                GateConfig::Circuit(ref circ) => {
+                    self.state.apply_circuit(circ);
                 },
-                GateConfig::Feedback(f) => {
+                GateConfig::Feedback(ref mut f) => {
                     match f(d, s, &outcomes) {
-                        Feedback::Halt => { break entropy; },
+                        Feedback::Halt => { break; },
                         Feedback::Simple => {
-                            self.sample_simple(d % 2 == 1, &mut gates);
+                            self.sample_simple(
+                                d % 2 == 1, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::Clifford => {
@@ -356,7 +271,7 @@ impl StabCircuit {
                         },
                         Feedback::GateSet(g1, g2) => {
                             self.sample_gateset(
-                                &g1, &g2, d % 2 == 1, &mut gates);
+                                &g1, &g2, d % 2 == 1, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::Circuit(circ) => {
@@ -366,26 +281,66 @@ impl StabCircuit {
                 },
             }
 
-            self.measure(&mut outcomes);
+            self.measure(d, meas_conf, &mut outcomes);
             if let Some(rcd) = meas.as_mut() { rcd.push(outcomes.clone()); }
 
             s = self.entropy();
-            entropy.push(s);
+            if let Some(rcd) = entropy.as_mut() { rcd.push(s); }
+
+            if let Some((rcd, part_size)) = mutinf.as_mut() {
+                rcd.push(self.state.mutual_information(*part_size));
+            }
+
             match depth_conf {
                 DepthConfig::Unlimited => { },
                 DepthConfig::Converge(tol) => {
                     check = (
                         2.0 * (sbar - s) / ((2 * d + 3) as f32 * sbar + s)
                     ).abs();
-                    if check < tol.unwrap_or(1e-4) { break entropy; }
+                    if check < tol.unwrap_or(1e-6) { break; }
                     sbar = (sbar + (d + 1) as f32 + s) / (d + 2) as f32;
                 },
                 DepthConfig::Const(d0) => {
-                    if d >= d0 { break entropy; }
+                    if d >= d0 { break; }
                 },
             }
             d += 1;
         }
+    }
+
+    /// Run the MIPT procedure for a general config.
+    ///
+    /// Returns the entanglement entropy measured once before the first layer,
+    /// and then after each round of measurements.
+    pub fn run_entropy(
+        &mut self,
+        mut config: CircuitConfig,
+        meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32> {
+        let mut entropy: Vec<f32> = Vec::new();
+        self.do_run(&mut config, meas, Some(&mut entropy), None);
+        entropy
+    }
+
+    /// Run the MIPT procedure for a general config.
+    ///
+    /// Returns the mutual information measured once before the first layer, and
+    /// then after each round of measurements.
+    pub fn run_mutinf(
+        &mut self,
+        mut config: CircuitConfig,
+        part_size: Option<usize>,
+        meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32> {
+        let mut mutinf: Vec<f32> = Vec::new();
+        self.do_run(&mut config, meas, None, Some((&mut mutinf, part_size)));
+        mutinf
+    }
+
+    /// Run the MIPT procedure for a general config without recording any
+    /// time-evolution data.
+    pub fn run(&mut self, mut config: CircuitConfig) {
+        self.do_run(&mut config, None, None, None)
     }
 }
 
@@ -407,15 +362,32 @@ impl Iterator for Pairs {
     }
 }
 
-/// Method for handling bipartitions on a 1 chain for the purpose of calculting
-/// the entanglement entropy.
-#[derive(Copy, Clone, Debug)]
-pub enum EntropyCut {
-    /// Average over all possible bipartitions.
-    Average,
-    /// A single bipartition. `Single(k)` places `k` qubits in one partition and
-    /// the remainder in the other.
-    Single(usize),
+struct PairsPeriodic {
+    iter: std::ops::Range<usize>
+}
+
+impl PairsPeriodic {
+    fn new(offs: bool, stop: usize) -> Self {
+        Self { iter: if offs { 1 } else { 0 } .. stop }
+    }
+}
+
+impl Iterator for PairsPeriodic {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(a) = self.iter.next() {
+            if let Some(b) = self.iter.next() {
+                Some((a, b))
+            } else if self.iter.end % 2 == 0 {
+                Some((a, 0))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 /// Post-measurement determination of a mid-circuit action.
@@ -446,17 +418,18 @@ pub enum DepthConfig {
     /// [feedback][GateConfig::Feedback].
     Unlimited,
     /// Run until the entanglement entropy converges on a steady-state value to
-    /// within some tolerance (defaults to 10<sup>-4</sup>).
+    /// within some tolerance (defaults to 10<sup>-6</sup>).
     ///
     /// The criterion for convergence is
-    /// ```math
-    /// 2 \left| \frac{\mu_{k+1} - \mu_k}{\mu_{k+1} + \mu_k} \right| < \text{tol}
-    /// ```
-    /// where `$\mu_k$` is the running average of the first `$k$` entropy
-    /// measurement, including the first before the circuit has begun; i.e. the
+    ///
+    /// 2|(*μ*<sub>*k*+1</sub> - *μ*<sub>*k*</sub>)
+    /// / (*μ*<sub>*k*+1</sub> + *μ*<sub>*k*</sub>)| < *tol*
+    ///
+    /// where *μ*<sub>*k*</sub> is the running average of the first *k* entropy
+    /// measurements, including the first before the circuit has begun; i.e. the
     /// entropy has reached a steady state when the absolute difference between
     /// consecutive values of the running average divided by their mean is less
-    /// than `tol`.
+    /// than *tol*.
     Converge(Option<f32>),
     /// Run for a constant depth.
     Const(usize),
@@ -486,6 +459,7 @@ pub enum G1Set {
 }
 
 impl G1Set {
+    /// Sample a single gate.
     pub fn sample<R>(&self, k: usize, rng: &mut R) -> Gate
     where R: Rng + ?Sized
     {
@@ -533,6 +507,7 @@ pub enum G2Set {
 }
 
 impl G2Set {
+    /// Sample a single gate.
     pub fn sample<R>(&self, a: usize, b: usize, rng: &mut R) -> Gate
     where R: Rng + ?Sized
     {
@@ -570,11 +545,62 @@ pub enum GateConfig<'a> {
     Feedback(FeedbackFn<'a>),
 }
 
+/// Boundary conditions, relevant to two-qubit gate tilings.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum BoundaryConfig {
+    /// Closed boundaries.
+    Closed,
+    /// Periodic boundaries.
+    Periodic,
+}
+
+/// Define the conditions for when measurements are applied.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct MeasureConfig {
+    /// Application of measurement layers.
+    pub layer: MeasLayerConfig,
+    /// Application of measurements within a single layer.
+    pub prob: MeasProbConfig,
+}
+
+/// Define the conditions for when measurement layers are applied.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MeasLayerConfig {
+    /// Perform measurements on every layer.
+    Every,
+    /// Perform measurements every `n` layers.
+    ///
+    /// `Period(1)` is equivalent to `Every`, and `Period(0)` applies no
+    /// measurements.
+    Period(usize),
+}
+
+/// Define the conditions for when measurements are applied within a single
+/// layer.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum MeasProbConfig {
+    /// Perform measurements randomly, as normal, with fixed probability.
+    Random(f32),
+    /// Perform a measurement on every `n`-th qubit, shifting by 1 on every
+    /// measurement layer. `Cycling(0)` and `Cycling(1)` both mean to measure
+    /// every qubit.
+    Cycling(usize),
+    /// Perform measurements in blocks of `n` qubits that slide without overlap
+    /// across the array.
+    Block(usize),
+    /// Perform measurements in sliding windows of `n` qubits.
+    Window(usize),
+}
+
 /// Top-level config for a circuit.
 pub struct CircuitConfig<'a> {
     /// Set the depth of the circuit.
     pub depth: DepthConfig,
     /// Set available gates to draw from.
     pub gates: GateConfig<'a>,
+    /// Set boundary conditions, relevant to two-qubit gate tilings.
+    pub boundaries: BoundaryConfig,
+    /// Set conditions for measurements.
+    pub measurement: MeasureConfig,
 }
 
