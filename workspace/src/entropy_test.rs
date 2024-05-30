@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use clifford_sim::circuit::StabCircuit;
+use clifford_sim::circuit::*;
 use ndarray as nd;
 use whooie::{ mkdir, print_flush, write_npz };
 
@@ -16,8 +16,17 @@ fn main() {
     let mut s_acc: nd::Array1<f32> = nd::Array1::zeros(DEPTH + 1);
     for k in 0..MC {
         print_flush!("\r {} ", k);
-        let mut circuit = StabCircuit::new(N, P_MEAS, None, None);
-        s_acc += &nd::Array1::from(circuit.run_simple(DEPTH, None));
+        let mut circuit = StabCircuit::new(N, None, None);
+        let config = CircuitConfig {
+            depth: DepthConfig::Const(DEPTH),
+            gates: GateConfig::Simple,
+            boundaries: BoundaryConfig::Periodic,
+            measurement: MeasureConfig {
+                layer: MeasLayerConfig::Every,
+                prob: MeasProbConfig::Random(P_MEAS),
+            },
+        };
+        s_acc += &nd::Array1::from(circuit.run_entropy(config, None));
     }
     s_acc /= MC as f32;
     println!();

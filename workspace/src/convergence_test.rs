@@ -1,13 +1,13 @@
 use std::path::PathBuf;
-use clifford_sim::circuit::StabCircuit;
+use clifford_sim::circuit::*;
 use ndarray as nd;
 use whooie::{ mkdir, print_flush, write_npz };
 
-const N: usize = 256; // number of qubits
+const N: usize = 512; // number of qubits
 
 fn main() {
     const P_MEAS: f32 = 0.08;
-    const MC: usize = 250;
+    const MC: usize = 50;
     const TOL: f32 = 1e-6;
 
     let outdir = PathBuf::from("output");
@@ -18,12 +18,21 @@ fn main() {
 
     for k in 0..MC {
         print_flush!("\r {} ", k);
-        let mut circuit = StabCircuit::new(N, P_MEAS, None, None);
-        let s = circuit.run_simple_until_converged(Some(TOL), None);
+        let mut circuit = StabCircuit::new(N, None, None);
+        let config = CircuitConfig {
+            depth: DepthConfig::Converge(Some(TOL)),
+            gates: GateConfig::Simple,
+            boundaries: BoundaryConfig::Periodic,
+            measurement: MeasureConfig {
+                layer: MeasLayerConfig::Every,
+                prob: MeasProbConfig::Random(P_MEAS),
+            },
+        };
+        let s = circuit.run_entropy(config, None);
         let n = s.len();
         depth_acc.push(n);
         entropy_acc.push(
-            s.into_iter().skip(n / 2).sum::<f32>() / (n / 2) as f32);
+            s.into_iter().skip(3 * n / 4).sum::<f32>() / (n / 4) as f32);
     }
     println!();
 

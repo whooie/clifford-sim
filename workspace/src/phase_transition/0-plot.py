@@ -20,7 +20,7 @@ for (k, (pk, sk)) in enumerate(zip(p_meas, entropy)):
 (
     P
     .ggrid()
-    .legend(fontsize="x-small")
+    .legend(fontsize="xx-small")
     .set_xlabel("System size")
     .set_ylabel("Entanglement entropy")
     .savefig(outdir.joinpath("phase_transition.png"))

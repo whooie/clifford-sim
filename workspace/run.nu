@@ -10,6 +10,7 @@ def main [] { }
 def "main exec" [
   --compute-only (-C) # Only run the executable
   --scripts-only (-S) # Only run the associated scripts
+  --pass-stdout (-p) # pass line-delineated STDOUT from the executable as arguments to the scripts
   --clear (-c) # Clear the terminal before doing anything
   --list (-l) # List available target executables
   target?: string # Name of executable
@@ -32,9 +33,25 @@ def "main exec" [
     $targets | each {|t| print $"  ($t)" }
     return
   }
-  if not $scripts_only {
-    cargo run --release --bin $target
+  let exec_out = if not $scripts_only {
+    if $pass_stdout {
+      try {
+        cargo run --release --bin $target
+        | complete
+        | get stdout
+        | split row "\n"
+        | where ($it | str length) > 0
+      } catch {
+        null
+      }
+    } else {
+      cargo run --release --bin $target
+      null
+    }
+  } else {
+    null
   }
+
   if not $compute_only {
     ls $"src/($target)"
     | get name
@@ -42,18 +59,11 @@ def "main exec" [
     | sort
     | each {|py|
         print $"(ansi white_bold):: python ($py)(ansi reset)"
-        python $py
-        # let result = (python $py | complete)
-        # if $result.exit_code == 0 {
-        #   try { echo ($result.stdout | str trim) }
-        # } else {
-        #   print "hello"
-        #   try { echo ($result.stdout | str trim) }
-        #   try { echo ($result.stderr | str trim) }
-        #   error make {
-        #     msg: $"script ($py) failed with exit code ($result.exit_code)"
-        #   }
-        # }
+        if $exec_out == null {
+          python $py
+        } else {
+          python $py ...$exec_out
+        }
       }
   }
 
