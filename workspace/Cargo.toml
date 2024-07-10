@@ -5,12 +5,14 @@ authors = [ "whooie <wcwhuie@gmail.com>",]
 edition = "2021"
 
 [dependencies]
+# thiserror = "*"
+# anyhow = "*"
 clifford-sim = { path = "../clifford_sim", version = "*" }
 itertools = "0.13.0"
 ndarray = "0.15.6"
+num-complex = "0.4.6"
+rand = "0.8.5"
 rayon = "1.10.0"
-# thiserror = "*"
-# anyhow = "*"
 
 [dependencies.whooie]
 git = "https://gitlab.com/whooie/rust-lib.git"
@@ -36,6 +38,10 @@ name = "phase_transition"
 [[bin]]
 path = "src/mutual_information.rs"
 name = "mutual_information"
+
+[[bin]]
+path = "src/clifford_test.rs"
+name = "clifford_test"
 
 [profile.release]
 lto = true
