@@ -25,14 +25,157 @@
 
 use std::{
     boxed::Box,
+    fmt,
     hash::{ Hash, Hasher },
-    ops::DerefMut,
+    ops::{
+        DerefMut,
+        Neg,
+        Add,
+        AddAssign,
+        Sub,
+        SubAssign,
+        Mul,
+        MulAssign,
+        Div,
+        DivAssign,
+    },
 };
 use itertools::Itertools;
 use nalgebra as na;
 use num_complex::Complex64 as C64;
 use rustc_hash::FxHasher;
-use crate::gate::{ Gate, Basis, Phase };
+use crate::gate::{ Gate, Basis };
+
+/// The argument of a complex phase factor, limited to integer multiples of π/4.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Phase {
+    /// 0
+    Pi0,
+    /// π/4
+    Pi1q,
+    /// π/2
+    Pi1h,
+    /// 3π/4
+    Pi3q,
+    /// π
+    Pi,
+    /// 5π/4
+    Pi5q,
+    /// 3π/2
+    Pi3h,
+    /// 7π/4
+    Pi7q,
+}
+
+impl fmt::Display for Phase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Pi0 => write!(f, "+1"),
+            Self::Pi1q => write!(f, "+e^iπ/4"),
+            Self::Pi1h => write!(f, "+i"),
+            Self::Pi3q => write!(f, "+e^i3π/4"),
+            Self::Pi => write!(f, "-1"),
+            Self::Pi5q => write!(f, "+e^i5π/4"),
+            Self::Pi3h => write!(f, "-i"),
+            Self::Pi7q => write!(f, "+e^i7π/4"),
+        }
+    }
+}
+
+impl Phase {
+    /// Convert to the bare multiple of π/4.
+    pub fn to_int(&self) -> i8 {
+        match self {
+            Self::Pi0  => 0,
+            Self::Pi1q => 1,
+            Self::Pi1h => 2,
+            Self::Pi3q => 3,
+            Self::Pi   => 4,
+            Self::Pi5q => 5,
+            Self::Pi3h => 6,
+            Self::Pi7q => 7,
+        }
+    }
+
+    /// Convert from a bare multiple of π/4 (modulo 8).
+    pub fn from_int(i: i8) -> Self {
+        match i.rem_euclid(8) {
+            0 => Self::Pi0,
+            1 => Self::Pi1q,
+            2 => Self::Pi1h,
+            3 => Self::Pi3q,
+            4 => Self::Pi,
+            5 => Self::Pi5q,
+            6 => Self::Pi3h,
+            7 => Self::Pi7q,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn as_complex(self) -> C64 {
+        use std::f64::consts::FRAC_PI_4 as PI4;
+        match self {
+            Self::Pi0  => 1.0_f64.into(),
+            Self::Pi1q => C64::cis(PI4),
+            Self::Pi1h => C64::i(),
+            Self::Pi3q => C64::cis(3.0 * PI4),
+            Self::Pi   => (-1.0_f64).into(),
+            Self::Pi5q => C64::cis(5.0 * PI4),
+            Self::Pi3h => -C64::i(),
+            Self::Pi7q => C64::cis(7.0 * PI4),
+        }
+    }
+}
+
+impl Neg for Phase {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output { Self::from_int(-self.to_int()) }
+}
+
+macro_rules! impl_phase_math {
+    (
+        $trait:ident,
+        $trait_fn:ident,
+        $trait_assign:ident,
+        $trait_assign_fn:ident,
+        $op:tt
+    ) => {
+        impl $trait for Phase {
+            type Output = Self;
+
+            fn $trait_fn(self, rhs: Self) -> Self::Output {
+                Self::from_int(self.to_int() $op rhs.to_int())
+            }
+        }
+
+        impl $trait_assign for Phase {
+            fn $trait_assign_fn(&mut self, rhs: Self) {
+                *self = *self $op rhs;
+            }
+        }
+    }
+}
+impl_phase_math!(Add, add, AddAssign, add_assign, +);
+impl_phase_math!(Sub, sub, SubAssign, sub_assign, -);
+impl_phase_math!(Mul, mul, MulAssign, mul_assign, *);
+impl_phase_math!(Div, div, DivAssign, div_assign, /);
+
+impl Mul<i8> for Phase {
+    type Output = Self;
+
+    fn mul(self, i: i8) -> Self::Output {
+        Self::from_int(self.to_int() * i)
+    }
+}
+
+impl Mul<Phase> for i8 {
+    type Output = Phase;
+
+    fn mul(self, ph: Phase) -> Self::Output {
+        Phase::from_int(self * ph.to_int())
+    }
+}
 
 /* Qubit **********************************************************************/
 

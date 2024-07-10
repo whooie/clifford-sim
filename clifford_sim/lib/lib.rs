@@ -12,4 +12,3 @@ pub mod stab;
 pub mod gate;
 pub mod circuit;
 pub mod graph;
-pub mod tensor;

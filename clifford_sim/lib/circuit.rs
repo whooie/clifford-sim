@@ -60,7 +60,7 @@ impl StabCircuit {
             buf.push(Gate::sample_single(k, &mut self.rng));
         });
         match bounds {
-            BoundaryConfig::Closed => {
+            BoundaryConfig::Open => {
                 Pairs::new(offs, self.n).for_each(|(a, b)| {
                     buf.push(Gate::CX(a, b));
                 });
@@ -68,6 +68,30 @@ impl StabCircuit {
             BoundaryConfig::Periodic => {
                 PairsPeriodic::new(offs, self.n).for_each(|(a, b)| {
                     buf.push(Gate::CX(a, b));
+                });
+            },
+        }
+    }
+
+    fn sample_cliffs(
+        &mut self,
+        offs: bool,
+        bounds: BoundaryConfig,
+        buf: &mut Vec<Gate>,
+    ) {
+        match bounds {
+            BoundaryConfig::Open => {
+                Pairs::new(offs, self.n).for_each(|(a, _b)| {
+                    let mut gates = Clifford::gen(2, &mut self.rng).unpack().0;
+                    gates.iter_mut().for_each(|g| { g.shift(a); });
+                    buf.append(&mut gates);
+                });
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, self.n).for_each(|(a, _b)| {
+                    let mut gates = Clifford::gen(2, &mut self.rng).unpack().0;
+                    gates.iter_mut().for_each(|g| { g.shift_mod(a, self.n); });
+                    buf.append(&mut gates);
                 });
             },
         }
@@ -85,7 +109,7 @@ impl StabCircuit {
             buf.push(g1.sample(k, &mut self.rng));
         });
         match bounds {
-            BoundaryConfig::Closed => {
+            BoundaryConfig::Open => {
                 Pairs::new(offs, self.n).for_each(|(a, b)| {
                     buf.push(g2.sample(a, b, &mut self.rng));
                 })
@@ -152,6 +176,10 @@ impl StabCircuit {
                         Cycling(1) => Pred::Always,
                         Cycling(n) => Pred::Func(
                             Box::new(move |k| k % n == d % n)),
+                        CyclingInv(0) => Pred::Always,
+                        CyclingInv(1) => Pred::Never,
+                        CyclingInv(n) => Pred::Func(
+                            Box::new(move |k| k % n != d % n)),
                         Block(0) => Pred::Never,
                         Block(b) => Pred::Func(
                             Box::new(move |k| k / b == d % b)),
@@ -177,7 +205,11 @@ impl StabCircuit {
                         Cycling(0) => Pred::Never,
                         Cycling(1) => Pred::Always,
                         Cycling(n) => Pred::Func(
-                            Box::new(move |k| k % n == d % n)),
+                            Box::new(move |k| k % n == (d / m) % n)),
+                        CyclingInv(0) => Pred::Always,
+                        CyclingInv(1) => Pred::Never,
+                        CyclingInv(n) => Pred::Func(
+                            Box::new(move |k| k % n != (d / m) % n)),
                         Block(0) => Pred::Never,
                         Block(b) => Pred::Func(
                             Box::new(move |k| k / b == (d / m) % b)),
@@ -243,9 +275,8 @@ impl StabCircuit {
                     self.sample_simple(d % 2 == 1, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
-                GateConfig::Clifford => {
-                    let cliff = Clifford::gen(self.n, &mut self.rng);
-                    gates.append(&mut cliff.unpack().0);
+                GateConfig::Clifford2 => {
+                    self.sample_cliffs(d % 2 == 1, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
                 GateConfig::GateSet(ref g1, ref g2) => {
@@ -264,9 +295,9 @@ impl StabCircuit {
                                 d % 2 == 1, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
-                        Feedback::Clifford => {
-                            let cliff = Clifford::gen(self.n, &mut self.rng);
-                            gates.append(&mut cliff.unpack().0);
+                        Feedback::Clifford2 => {
+                            self.sample_cliffs(
+                                d % 2 == 1, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::GateSet(g1, g2) => {
@@ -398,9 +429,9 @@ pub enum Feedback {
     /// Draw the next layer of gates from the "simple" set (all single-qubit
     /// gates and tiling CXs).
     Simple,
-    /// Draw the next layer of gates uniformly from the set of *N*-qubit
-    /// Clifford gates.
-    Clifford,
+    /// Replace distinct, overlapped one- and two-qubit unitaries with tiled,
+    /// uniformly sampled two-qubit Clifford gates.
+    Clifford2,
     /// Draw the next layer of gates uniformly from gate sets (two-qubit gates
     /// will still alternately tile).
     GateSet(G1Set, G2Set),
@@ -535,8 +566,9 @@ impl G2Set {
 pub enum GateConfig<'a> {
     /// The "simple" set (all single-qubit gates and tiling CXs).
     Simple,
-    /// Uniformly sampled *N*-qubit Clifford gates.
-    Clifford,
+    /// Replace distinct, overlapped one- and two-qubit unitaries with tiled,
+    /// uniformly sampled two-qubit Clifford gates.
+    Clifford2,
     /// A particular gate set.
     GateSet(G1Set, G2Set),
     /// A particular sequence of gates.
@@ -548,8 +580,8 @@ pub enum GateConfig<'a> {
 /// Boundary conditions, relevant to two-qubit gate tilings.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BoundaryConfig {
-    /// Closed boundaries.
-    Closed,
+    /// Open boundaries.
+    Open,
     /// Periodic boundaries.
     Periodic,
 }
@@ -582,14 +614,37 @@ pub enum MeasProbConfig {
     /// Perform measurements randomly, as normal, with fixed probability.
     Random(f32),
     /// Perform a measurement on every `n`-th qubit, shifting by 1 on every
-    /// measurement layer. `Cycling(0)` and `Cycling(1)` both mean to measure
-    /// every qubit.
+    /// measurement layer. `Cycling(0)` means to never measure any qubit and
+    /// `Cycling(1)` means to always measure every qubit.
     Cycling(usize),
+    /// Inverse of `Cycling`: Perform a measurement on every qubit *except*
+    /// every `n`-th qubit, shifting by 1 on every measurement layer.
+    /// `Cycling(0)` means to always measure every qubit and `Cycling(1)` means
+    /// to never measure any qubit.
+    CyclingInv(usize),
     /// Perform measurements in blocks of `n` qubits that slide without overlap
     /// across the array.
     Block(usize),
     /// Perform measurements in sliding windows of `n` qubits.
     Window(usize),
+}
+
+impl MeasProbConfig {
+    /// Convert a measurement probability into a `Cycling` pattern.
+    ///
+    /// The probability `p` is converted to `Cycling(round(1 / p))` if `p <
+    /// 0.5`, otherwise `CyclingInv(round(1 / (1 - p)))`.
+    pub fn cycling_prob(p: f32) -> Self {
+        if p.abs() < f32::EPSILON {
+            Self::Cycling(0)
+        } else if (1.0 - p).abs() < f32::EPSILON {
+            Self::Cycling(1)
+        } else if p.abs() < 0.5 {
+            Self::Cycling(p.recip().round() as usize)
+        } else {
+            Self::CyclingInv((1.0 - p).recip().round() as usize)
+        }
+    }
 }
 
 /// Top-level config for a circuit.

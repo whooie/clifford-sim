@@ -29,10 +29,8 @@
 //!
 //! The code in this module is pretty much a direct translation of Scott
 //! Aaronson's code (see [arXiv:quant-ph/0406196][tableau] for details on his
-//! extension and [here][chp] for his implementation).
-// with some extra parts to
-// handle the calculation of entanglement entropy, using methods from
-// [arXiv:1901.08092][entropy1] and [arXiv:1608.09650][entropy2].
+//! extension and [here][chp] for his implementation) with some extra parts to
+//! calculate entanglement entropy from [arXiv:1901.08092][entropy].
 //!
 //! # Example
 //! ```
@@ -58,13 +56,12 @@
 //! // +1∣00000⟩ +1∣11000⟩
 //! ```
 //!
-//! [^1]: In their implementation, Aaronson and Gottesman also includes a single
+//! [^1]: In their implementation, Aaronson and Gottesman also include a single
 //! extra row and phase as a useful scratch space for many of his operations.
 //!
 //! [tableau]: https://arxiv.org/abs/quant-ph/0406196
 //! [chp]: https://www.scottaaronson.com/chp/
-// [entropy1]: https://arxiv.org/abs/1901.08092
-// [entropy2]: https://arxiv.org/abs/1608.09650
+//! [entropy]: https://arxiv.org/abs/1901.08092
 
 #![allow(unused_imports)]
 
@@ -712,25 +709,69 @@ impl Stab {
     /// The partition defaults to the leftmost `floor(n / 2)` qubits.
     #[inline]
     pub fn entanglement_entropy(&self, part: Option<Partition>) -> f32 {
-        let mut j5 = 0;
-        let mut pw = 0;
         let part = part.unwrap_or(Partition::Left(self.n / 2 - 1));
-        let n
-            = self.x.row_iter()
+
+        // let mut j5 = 0;
+        // let mut pw = 0;
+        // let n
+        //     = self.x.row_iter()
+        //     .zip(self.z.row_iter())
+        //     .skip(self.n)
+        //     .take(self.n)
+        //     .filter(|(xi, zi)| {
+        //         (0..self.n)
+        //             .filter(|&j| !part.contains(j))
+        //             .all(|j| {
+        //                 j5 = j >> 5;
+        //                 pw = PW[j & 31];
+        //                 xi[j5] & pw == 0 && zi[j5] & pw == 0
+        //             })
+        //     })
+        //     .count() as f32;
+        // part.size(self.n) as f32 - n
+
+        self.x.row_iter()
             .zip(self.z.row_iter())
             .skip(self.n)
             .take(self.n)
             .filter(|(xi, zi)| {
-                (0..self.n)
-                    .filter(|&j| !part.contains(j))
-                    .all(|j| {
-                        j5 = j >> 5;
-                        pw = PW[j & 31];
-                        xi[j5] & pw == 0 && zi[j5] & pw == 0
+                let maybe_l
+                    = xi.iter()
+                    .zip(zi)
+                    .enumerate()
+                    .find_map(|(j5, (xij5, zij5))| {
+                        PW.iter()
+                            .enumerate()
+                            .find_map(|(jj, pwjj)| {
+                                (xij5 & pwjj != 0 || zij5 & pwjj != 0)
+                                    .then_some(jj)
+                            })
+                            .map(|jj| (j5 << 5) + jj)
+                    });
+                let maybe_r
+                    = xi.iter()
+                    .zip(zi)
+                    .enumerate()
+                    .rev()
+                    .find_map(|(j5, (xij5, zij5))| {
+                        PW.iter()
+                            .enumerate()
+                            .rev()
+                            .find_map(|(jj, pwjj)| {
+                                (xij5 & pwjj != 0 || zij5 & pwjj != 0)
+                                    .then_some(jj)
+                            })
+                            .map(|jj| (j5 << 5) + jj)
+                    });
+                maybe_l.zip(maybe_r)
+                    .map(|(l, r)| {
+                        (part.contains(l) && !part.contains(r))
+                            || (!part.contains(l) && part.contains(r))
                     })
+                    .unwrap_or(false)
             })
-            .count() as f32;
-        part.size(self.n) as f32 - n
+            .count() as f32 * 0.5
+
     }
 
     /// Calculate the mutual information between two subsystems of a given size,
@@ -954,6 +995,11 @@ pub enum Partition {
 }
 
 impl Partition {
+    /// Return the union of two partitions.
+    pub fn union(self, other: Self) -> Self {
+        Self::Union(Rc::new(self), Rc::new(other))
+    }
+
     /// Return the intersection of two partitions.
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         match (self, other) {

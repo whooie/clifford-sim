@@ -17,6 +17,7 @@ use std::{
     },
 };
 use itertools::Itertools;
+use nalgebra as na;
 use num_complex::Complex64 as C64;
 use rand::Rng;
 use crate::tree::Qubit;
@@ -26,33 +27,21 @@ use crate::tree::Qubit;
 pub enum Phase {
     /// 0
     Pi0,
-    /// π/4
-    Pi1q,
     /// π/2
     Pi1h,
-    /// 3π/4
-    Pi3q,
     /// π
     Pi,
-    /// 5π/4
-    Pi5q,
     /// 3π/2
     Pi3h,
-    /// 7π/4
-    Pi7q,
 }
 
 impl fmt::Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Pi0 => write!(f, "+1"),
-            Self::Pi1q => write!(f, "+e^iπ/4"),
             Self::Pi1h => write!(f, "+i"),
-            Self::Pi3q => write!(f, "+e^i3π/4"),
             Self::Pi => write!(f, "-1"),
-            Self::Pi5q => write!(f, "+e^i5π/4"),
             Self::Pi3h => write!(f, "-i"),
-            Self::Pi7q => write!(f, "+e^i7π/4"),
         }
     }
 }
@@ -62,42 +51,29 @@ impl Phase {
     pub fn to_int(&self) -> i8 {
         match self {
             Self::Pi0  => 0,
-            Self::Pi1q => 1,
-            Self::Pi1h => 2,
-            Self::Pi3q => 3,
-            Self::Pi   => 4,
-            Self::Pi5q => 5,
-            Self::Pi3h => 6,
-            Self::Pi7q => 7,
+            Self::Pi1h => 1,
+            Self::Pi   => 2,
+            Self::Pi3h => 3,
         }
     }
 
     /// Convert from a bare multiple of π/4 (modulo 8).
     pub fn from_int(i: i8) -> Self {
-        match i.rem_euclid(8) {
+        match i.rem_euclid(4) {
             0 => Self::Pi0,
-            1 => Self::Pi1q,
-            2 => Self::Pi1h,
-            3 => Self::Pi3q,
-            4 => Self::Pi,
-            5 => Self::Pi5q,
-            6 => Self::Pi3h,
-            7 => Self::Pi7q,
+            1 => Self::Pi1h,
+            2 => Self::Pi,
+            3 => Self::Pi3h,
             _ => unreachable!(),
         }
     }
 
     pub fn as_complex(self) -> C64 {
-        use std::f64::consts::FRAC_PI_4 as PI4;
         match self {
             Self::Pi0  => 1.0_f64.into(),
-            Self::Pi1q => C64::cis(PI4),
             Self::Pi1h => C64::i(),
-            Self::Pi3q => C64::cis(3.0 * PI4),
             Self::Pi   => (-1.0_f64).into(),
-            Self::Pi5q => C64::cis(5.0 * PI4),
             Self::Pi3h => -C64::i(),
-            Self::Pi7q => C64::cis(7.0 * PI4),
         }
     }
 }
@@ -400,6 +376,54 @@ impl Gate {
         let n = kinds.len();
         kinds[rng.gen_range(0..n)].make(arg)
     }
+
+    /// Return `true` if `self` and `other` are inverses.
+    pub fn is_inv(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::H(a), Self::H(b)) if a == b => true,
+            (Self::X(a), Self::X(b)) if a == b => true,
+            (Self::Y(a), Self::Y(b)) if a == b => true,
+            (Self::Z(a), Self::Z(b)) if a == b => true,
+            (Self::S(a), Self::SInv(b)) if a == b => true,
+            (Self::CX(ca, ta), Self::CX(cb, tb)) if ca == cb && ta == tb => true,
+            (Self::CZ(ca, ta), Self::CZ(cb, tb))
+                if (ca == cb && ta == tb) || (ca == tb && cb == ta) => true,
+            (Self::Swap(aa, ba), Self::Swap(ab, bb))
+                if (aa == ba && ab == bb) || (aa == bb && ab == ba) => true,
+            _ => false,
+        }
+    }
+
+    // shift qubit indices by `d`
+    pub(crate) fn shift(&mut self, d: usize) {
+        match self {
+            Self::H(a) => { *a += d; },
+            Self::X(a) => { *a += d; },
+            Self::Y(a) => { *a += d; },
+            Self::Z(a) => { *a += d; },
+            Self::S(a) => { *a += d; },
+            Self::SInv(a) => { *a += d; },
+            Self::CX(c, t) => { *c += d; *t += d; },
+            Self::CZ(c, t) => { *c += d; *t += d; },
+            Self::Swap(a, b) => { *a += d; *b += d; },
+        }
+    }
+
+    // shift qubit indices by `d`, modulo `m`
+    pub(crate) fn shift_mod(&mut self, d: usize, m: usize) {
+        match self {
+            Self::H(a) => { *a += d; *a %= m; },
+            Self::X(a) => { *a += d; *a %= m; },
+            Self::Y(a) => { *a += d; *a %= m; },
+            Self::Z(a) => { *a += d; *a %= m; },
+            Self::S(a) => { *a += d; *a %= m; },
+            Self::SInv(a) => { *a += d; *a %= m; },
+            Self::CX(c, t) => { *c += d; *c %= m; *t += d; *t %= m; },
+            Self::CZ(c, t) => { *c += d; *c %= m; *t += d; *t %= m; },
+            Self::Swap(a, b) => { *a += d; *a %= m; *b += d; *b %= m; },
+        }
+    }
+
 }
 
 /// A single-qubit Pauli operator.
@@ -444,16 +468,7 @@ impl Pauli {
         }
     }
 
-    fn gen_nqubit<const N: usize, R>(rng: &mut R) -> [Self; N]
-    where R: Rng + ?Sized
-    {
-        let mut p = [Self::I; N];
-        p.iter_mut()
-            .for_each(|pk| { *pk = Self::from_int(rng.gen_range(0..4)); });
-        p
-    }
-
-    fn gen_nqubitd<R>(n: usize, rng: &mut R) -> Vec<Self>
+    fn gen_nqubit<R>(n: usize, rng: &mut R) -> Vec<Self>
     where R: Rng + ?Sized
     {
         (0..n).map(|_| Self::from_int(rng.gen_range(0..4))).collect()
@@ -569,34 +584,37 @@ impl Clifford {
         let mut idx_scratch: Vec<usize> = Vec::new();
         for llim in 0..n {
             // init
-            p0 = Pauli::gen_nqubitd(n, rng);
+            p0 = Pauli::gen_nqubit(n, rng);
+            while p0.iter().all(|p| *p == Pauli::I) {
+                p0 = Pauli::gen_nqubit(n, rng);
+            }
             p1 = {
-                p = Pauli::gen_nqubitd(n, rng);
+                p = Pauli::gen_nqubit(n, rng);
                 let n_anti_comm
                     = p0.iter().zip(&p).skip(llim)
                     .filter(|(p0k, pk)| !p0k.commutes_with(**pk))
                     .count();
                 if n_anti_comm % 2 == 0 {
-                    *p.last_mut().unwrap()
-                        = p0.last_mut().unwrap().gen_anticomm(rng);
+                    let k = rng.gen_range(llim..n);
+                    p[k] = p0[k].gen_anticomm(rng);
                 }
                 p
             };
             tab.init_with(&p0, &p1, &[rng.gen(), rng.gen()]);
 
             macro_rules! step_12 {
-                ( $tab:ident, $llim:ident, $idx_scratch:ident, $row:literal )
+                ( $tab:ident, $llim:ident, $idx_scratch:ident, $row:ident )
                 => {
                     // (1)
                     // clear top row of z: H
                     $tab.iter_xz().enumerate().skip($llim)
-                        .filter(|(_, (txj, tzj))| tzj[$row] && !txj[$row])
+                        .filter(|(_, (txj, tzj))| tzj.$row && !txj.$row)
                         .for_each(|(j, _)| { $idx_scratch.push(j); });
                     $idx_scratch.drain(..)
                         .for_each(|j| { $tab.h(j); });
                     // clear top row of z: S
                     $tab.iter_xz().enumerate().skip($llim)
-                        .filter(|(_, (txj, tzj))| tzj[$row] && txj[$row])
+                        .filter(|(_, (txj, tzj))| tzj.$row && txj.$row)
                         .for_each(|(j, _)| { $idx_scratch.push(j); });
                     $idx_scratch.drain(..)
                         .for_each(|j| { $tab.s(j); });
@@ -604,7 +622,7 @@ impl Clifford {
                     // (2)
                     // clear top row of x, all but one: CNOTs
                     $tab.iter_xz().enumerate().skip($llim)
-                        .filter(|(_, (txj, _))| txj[$row]) // guaranteed at least 1 such
+                        .filter(|(_, (txj, _))| txj.$row) // guaranteed at least 1 such
                         .for_each(|(j, _)| { $idx_scratch.push(j); });
                     while $idx_scratch.len() > 1 {
                         $idx_scratch
@@ -622,7 +640,7 @@ impl Clifford {
                     }
                 }
             }
-            step_12!(tab, llim, idx_scratch, 0);
+            step_12!(tab, llim, idx_scratch, a);
 
             // (3)
             // move the remaining x in the top row to the leftmost column
@@ -633,35 +651,63 @@ impl Clifford {
 
             // (4)
             // apply a hadamard if p1 != Z1.I.I...
-            if tab.tabx[llim][1]
-                || !tab.tabz[llim][1]
-                || tab.iter_xz().any(|(txj, tzj)| txj[1] || tzj[1])
+            if !tab.tabz[llim].b
+                || tab.tabx[llim].b
+                || tab.iter_xz().skip(llim + 1).any(|(txj, tzj)| txj.b || tzj.b)
             {
                 tab.h(llim);
                 // repeat (1) and (2) above for the bottom row
-                step_12!(tab, llim, idx_scratch, 1);
+                step_12!(tab, llim, idx_scratch, b);
+                tab.h(llim);
             }
-            tab.h(llim);
 
             // (5)
             // clear signs
             match tab.sign {
-                [false, false] => { },
-                [false, true ] => { tab.circuit.push(Gate::X(llim)); },
-                [true,  false] => { tab.circuit.push(Gate::Z(llim)); },
-                [true,  true ] => { tab.circuit.push(Gate::Y(llim)); },
+                TabCol { a: false, b: false } => { },
+                TabCol { a: false, b: true  }
+                    => { tab.circuit.push(Gate::X(llim)); },
+                TabCol { a: true,  b: true  }
+                    => { tab.circuit.push(Gate::Y(llim)); },
+                TabCol { a: true,  b: false }
+                    => { tab.circuit.push(Gate::Z(llim)); },
             }
         }
-        Self(tab.unpack(), n)
+        Self(reduce(tab.unpack()), n)
     }
+}
+
+fn reduce(gates: Vec<Gate>) -> Vec<Gate> {
+    let mut reduced: Vec<Gate> = Vec::with_capacity(gates.len());
+    for gate in gates.into_iter() {
+        if let Some(g) = reduced.last() {
+            if g.is_inv(&gate) {
+                reduced.pop();
+            } else {
+                reduced.push(gate);
+            }
+        } else {
+            reduced.push(gate);
+        }
+    }
+    reduced
+}
+
+#[derive(Copy, Clone, Debug)]
+struct TabCol {
+    a: bool,
+    b: bool,
 }
 
 #[derive(Clone, Debug)]
 struct Tableau {
     n: usize,
-    tabx: Vec<[bool; 2]>,
-    tabz: Vec<[bool; 2]>,
-    sign: [bool; 2],
+    tabx: Vec<TabCol>,
+    tabz: Vec<TabCol>,
+    sign: TabCol,
+    // tabx: Vec<[bool; 2]>,
+    // tabz: Vec<[bool; 2]>,
+    // sign: [bool; 2],
     circuit: Vec<Gate>,
 }
 
@@ -669,18 +715,18 @@ impl Tableau {
     fn new(n: usize) -> Self {
         Self {
             n,
-            tabx: vec![[false; 2]; n],
-            tabz: vec![[false; 2]; n],
-            sign: [false; 2],
+            tabx: vec![TabCol { a: false, b: false }; n],
+            tabz: vec![TabCol { a: false, b: false }; n],
+            sign: TabCol { a: false, b: false },
             circuit: Vec::new(),
         }
     }
 
     fn is_normal(&self, llim: usize) -> bool {
-        self.tabx[0][0] && !self.tabx[0][1]
-            && !self.tabz[0][0] && self.tabz[0][1]
-            && self.tabx.iter().skip(llim + 1).all(|txj| !txj[0] && !txj[1])
-            && self.tabz.iter().skip(llim + 1).all(|tzj| !tzj[0] && !tzj[1])
+        self.tabx[0].a && !self.tabx[0].b
+            && !self.tabz[0].a && self.tabz[0].b
+            && self.tabx.iter().skip(llim + 1).all(|txj| !txj.a && !txj.b)
+            && self.tabz.iter().skip(llim + 1).all(|tzj| !tzj.a && !tzj.b)
     }
 
     fn init_with(&mut self, p0: &[Pauli], p1: &[Pauli], sign: &[bool; 2])
@@ -691,22 +737,24 @@ impl Tableau {
         for ((p0j, p1j), (txj, tzj)) in iter {
             match p0j {
                 Pauli::I => { },
-                Pauli::X => { txj[0] = true; },
-                Pauli::Y => { txj[0] = true; tzj[0] = true; },
-                Pauli::Z => { tzj[0] = true; },
+                Pauli::X => { txj.a = true; },
+                Pauli::Y => { txj.a = true; tzj.a = true; },
+                Pauli::Z => { tzj.a = true; },
             }
             match p1j {
                 Pauli::I => { },
-                Pauli::X => { txj[1] = true; },
-                Pauli::Y => { txj[1] = true; tzj[1] = true; },
-                Pauli::Z => { tzj[1] = true; },
+                Pauli::X => { txj.b = true; },
+                Pauli::Y => { txj.b = true; tzj.b = true; },
+                Pauli::Z => { tzj.b = true; },
             }
         }
-        self.sign[0] = sign[0];
-        self.sign[1] = sign[1];
+        self.sign.a = sign[0];
+        self.sign.b = sign[1];
     }
 
-    fn iter_xz(&self) -> impl Iterator<Item = (&[bool; 2], &[bool; 2])> + '_ {
+    #[inline]
+    fn iter_xz(&self) -> impl Iterator<Item = (&TabCol, &TabCol)> + '_
+    {
         self.tabx.iter().zip(self.tabz.iter())
     }
 
@@ -718,17 +766,17 @@ impl Tableau {
 
     #[inline]
     fn s(&mut self, j: usize) {
-        self.tabz[j][0] ^= self.tabx[j][0];
-        self.tabz[j][1] ^= self.tabx[j][1];
+        self.tabz[j].a ^= self.tabx[j].a;
+        self.tabz[j].b ^= self.tabx[j].b;
         self.circuit.push(Gate::S(j));
     }
 
     #[inline]
     fn cnot(&mut self, c: usize, j: usize) {
-        self.tabx[j][0] ^= self.tabx[c][0];
-        self.tabx[j][1] ^= self.tabx[c][1];
-        self.tabz[c][0] ^= self.tabz[j][0];
-        self.tabz[c][1] ^= self.tabz[j][1];
+        self.tabx[j].a ^= self.tabx[c].a;
+        self.tabx[j].b ^= self.tabx[c].b;
+        self.tabz[c].a ^= self.tabz[j].a;
+        self.tabz[c].b ^= self.tabz[j].b;
         self.circuit.push(Gate::CX(c, j));
     }
 
@@ -762,6 +810,278 @@ impl Basis {
             Self::Y => (Qubit::Yp, Qubit::Ym),
             Self::Z => (Qubit::Zp, Qubit::Zm),
         }
+    }
+}
+
+/// A member of the `N`-qubit Pauli group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NPauli(pub Phase, pub Vec<Pauli>);
+
+impl NPauli {
+    /// Create a new `N`-qubit Pauli operator.
+    pub fn new<I>(phase: Phase, paulis: I) -> Self
+    where I: IntoIterator<Item = Pauli>
+    {
+        Self(phase, paulis.into_iter().collect())
+    }
+
+    /// Return the number of qubits that `self` acts on.
+    pub fn n(&self) -> usize { self.1.len() }
+
+    /// Sample a random `n`-qubit Pauli operator from the uniform distribution.
+    pub fn gen<R>(n: usize, rng: &mut R) -> Self
+    where R: Rng + ?Sized
+    {
+        let phase = Phase::from_int(rng.gen_range(0..4));
+        let paulis: Vec<Pauli>
+            = (0..n)
+            .map(|_| Pauli::from_int(rng.gen_range(0..4)))
+            .collect();
+        Self(phase, paulis)
+    }
+}
+
+/// A series of [`Gate`]s implementing a element of the `N`-qubit Clifford
+/// group.
+///
+/// All gates sourced from this type are guaranteed to apply to qubit indices
+/// less than or equal to `N` and all two-qubit gate indices are guaranteed to
+/// be non-equal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Clifford2(Vec<Gate>, usize);
+
+impl IntoIterator for Clifford2 {
+    type Item = Gate;
+    type IntoIter = <Vec<Gate> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+
+impl<'a> IntoIterator for &'a Clifford2 {
+    type Item = &'a Gate;
+    type IntoIter = <&'a Vec<Gate> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
+}
+
+impl Clifford2 {
+    /// Convert a series of gates to a new `n`-qubit Clifford2 circuit, verifying
+    /// that all qubit indices are less than or equal to `n` and that all
+    /// two-qubit gate indices are non-equal.
+    ///
+    /// If the above conditions do not hold, all gates are returned in a new
+    /// vector.
+    pub fn new<I>(n: usize, gates: I) -> Result<Self, Vec<Gate>>
+    where I: IntoIterator<Item = Gate>
+    {
+        let gates: Vec<Gate> = gates.into_iter().collect();
+        if gates.iter()
+            .all(|gate| {
+                match gate {
+                    Gate::H(k)
+                    | Gate::X(k)
+                    | Gate::Y(k)
+                    | Gate::Z(k)
+                    | Gate::S(k)
+                    | Gate::SInv(k)
+                    => *k <= n,
+                    Gate::CX(a, b)
+                    | Gate::CZ(a, b)
+                    | Gate::Swap(a, b)
+                    => *a <= n && *b <= n && a != b,
+                }
+            })
+        {
+            Ok(Self(gates, n))
+        } else {
+            Err(gates)
+        }
+    }
+
+    /// Unpack `self` into a bare sequence of [`Gate`]s and the number of
+    /// qubits.
+    #[inline]
+    pub fn unpack(self) -> (Vec<Gate>, usize) { (self.0, self.1) }
+
+    /// Return the number of qubits.
+    pub fn n(&self) -> usize { self.1 }
+
+    /// Return the number of gates.
+    pub fn len(&self) -> usize { self.0.len() }
+
+    /// Return `true` if the number of gates is zero.
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+
+    /// Generates a random element of the `n`-qubit Clifford2 group as a
+    /// particular sequence of [`Gate`]s.
+    pub fn gen<R>(n: usize, rng: &mut R) -> Self
+    where R: Rng + ?Sized
+    {
+        // init
+        let mut delta: na::DMatrix<bool>
+            = na::DMatrix::from_element(n, n, false);
+        delta.fill_diagonal(true);
+        let mut deltap = delta.clone();
+        let mut gamma: na::DMatrix<bool>
+            = na::DMatrix::from_element(n, n, false);
+        let mut gammap = gamma.clone();
+
+        // sample hadamards and permutation from the quantum mallows distribution
+        let (h, mut s) = sample_qmallows(n, rng);
+
+        // fill out gamma and delta matrices
+        let mut b: bool;
+        for i in 0..n {
+            gammap[(i, i)] = rng.gen();
+            if h[i] { gamma[(i, i)] = rng.gen(); }
+        }
+        for j in 0..n {
+            for i in j + 1..n {
+                b = rng.gen();
+                gammap[(i, j)] = b;
+                gammap[(j, i)] = b;
+                deltap[(i, j)] = rng.gen();
+
+                if h[i] && h[j] {
+                    b = rng.gen();
+                    gamma[(i, j)] = b;
+                    gamma[(j, i)] = b;
+                }
+                if h[i] && !h[j] && s[i] < s[j] {
+                    b = rng.gen();
+                    gamma[(i, j)] = b;
+                    gamma[(j, i)] = b;
+                }
+                if !h[i] && h[j] && s[i] > s[j] {
+                    b = rng.gen();
+                    gamma[(i, j)] = b;
+                    gamma[(j, i)] = b;
+                }
+                if !h[i] && h[j] {
+                    delta[(i, j)] = rng.gen();
+                }
+                if h[i] && h[j] && s[i] > s[j] {
+                    delta[(i, j)] = rng.gen();
+                }
+                if !h[i] && !h[j] && s[i] < s[j] {
+                    delta[(i, j)] = rng.gen();
+                }
+            }
+        }
+
+        // sample a random n-qubit pauli
+        let pauli = NPauli::gen(n, rng);
+
+        // assemble circuit
+        let mut gates: Vec<Gate> = Vec::new();
+        borel(n, Some(&pauli), &gammap, &deltap, &mut gates);
+        permutation(n, &mut s, &mut gates);
+        hadamard_layer(&h, &mut gates);
+        borel(n, None, &gamma, &delta, &mut gates);
+        Self(gates, n)
+    }
+}
+
+fn sample_qmallows<R>(n: usize, rng: &mut R) -> (Vec<bool>, Vec<usize>)
+where R: Rng + ?Sized
+{
+    let mut h: Vec<bool> = vec![false; n];
+    let mut s: Vec<usize> = vec![0; n];
+    let mut a: Vec<usize> = (0..n).collect();
+    let mut m: usize;
+    let mut r: f32;
+    let mut idx: usize;
+    let mut k: usize;
+    for i in 0..n {
+        m = n - i; // number of elements in `a`
+        r = rng.gen();
+        idx = (1.0 + (1.0 - r) * 4.0_f32.powi(-(m as i32)))
+            .log2()
+            .ceil() as usize;
+        h[i] = idx < m;
+        k = if idx < m { idx } else { 2 * m - idx - 1 };
+        s[i] = a[k];
+        a.remove(k);
+    }
+    (h, s)
+}
+
+fn borel(
+    n: usize,
+    pauli: Option<&NPauli>,
+    gamma: &na::DMatrix<bool>,
+    delta: &na::DMatrix<bool>,
+    buf: &mut Vec<Gate>,
+) {
+    for (c, d_c) in delta.column_iter().enumerate().take(n - 1).rev() {
+        for (t, dtc) in d_c.iter().enumerate().skip(c + 1).rev() {
+            if *dtc { buf.push(Gate::CX(c, t)); }
+        }
+    }
+    for (c, gc_) in gamma.row_iter().enumerate() {
+        for (t, gct) in gc_.iter().enumerate().skip(c + 1) {
+            if *gct { buf.push(Gate::CZ(c, t)); }
+        }
+    }
+    for (i, gii) in gamma.diagonal().iter().enumerate() {
+        if *gii { buf.push(Gate::S(i)); }
+    }
+    if let Some(NPauli(phase, paulis)) = pauli {
+        for (k, p) in paulis.iter().enumerate() {
+            match *p {
+                Pauli::I => { continue; },
+                Pauli::X => { buf.push(Gate::X(k)); }
+                Pauli::Y => { buf.push(Gate::Y(k)); }
+                Pauli::Z => { buf.push(Gate::Z(k)); }
+            }
+        }
+        match *phase {
+            Phase::Pi0 => { },
+            Phase::Pi1h => {
+                buf.push(Gate::S(0));
+                buf.push(Gate::X(0));
+                buf.push(Gate::S(0));
+                buf.push(Gate::X(0));
+            },
+            Phase::Pi => {
+                buf.push(Gate::Z(0));
+                buf.push(Gate::X(0));
+                buf.push(Gate::Z(0));
+                buf.push(Gate::X(0));
+            },
+            Phase::Pi3h => {
+                buf.push(Gate::SInv(0));
+                buf.push(Gate::X(0));
+                buf.push(Gate::SInv(0));
+                buf.push(Gate::X(0));
+            },
+        }
+    }
+}
+
+fn permutation(n: usize, s: &mut [usize], buf: &mut Vec<Gate>) {
+    // implement a permutation operator with only swaps by finding the sequence
+    // (of swaps) that sorts s and reversing
+    let mut acc: Vec<Gate> = Vec::with_capacity(n - 1);
+    let mut k: usize;
+    for t in 0..n - 1 {
+        if s[t] != t {
+            k = s.iter()
+                .enumerate()
+                .skip(t + 1)
+                .find_map(|(j, p)| (*p == t).then_some(j))
+                .unwrap();
+            s.swap(t, k);
+            acc.push(Gate::Swap(t, k));
+        }
+    }
+    acc.reverse();
+    buf.append(&mut acc);
+}
+
+fn hadamard_layer(h: &[bool], buf: &mut Vec<Gate>) {
+    for (k, hk) in h.iter().enumerate() {
+        if *hk { buf.push(Gate::H(k)); }
     }
 }
 
