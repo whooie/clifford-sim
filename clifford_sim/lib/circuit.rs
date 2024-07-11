@@ -267,21 +267,21 @@ impl StabCircuit {
         }
 
         let mut gates: Vec<Gate> = Vec::new();
-        let mut d: usize = 0;
+        let mut d: usize = 1;
         loop {
             gates.clear();
             match gate_conf {
                 GateConfig::Simple => {
-                    self.sample_simple(d % 2 == 1, bound_conf, &mut gates);
+                    self.sample_simple(d % 2 == 0, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
                 GateConfig::Clifford2 => {
-                    self.sample_cliffs(d % 2 == 1, bound_conf, &mut gates);
+                    self.sample_cliffs(d % 2 == 0, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
                 GateConfig::GateSet(ref g1, ref g2) => {
                     self.sample_gateset(
-                        g1, g2, d % 2 == 1, bound_conf, &mut gates);
+                        g1, g2, d % 2 == 0, bound_conf, &mut gates);
                     self.state.apply_circuit(&gates);
                 },
                 GateConfig::Circuit(ref circ) => {
@@ -292,17 +292,17 @@ impl StabCircuit {
                         Feedback::Halt => { break; },
                         Feedback::Simple => {
                             self.sample_simple(
-                                d % 2 == 1, bound_conf, &mut gates);
+                                d % 2 == 0, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::Clifford2 => {
                             self.sample_cliffs(
-                                d % 2 == 1, bound_conf, &mut gates);
+                                d % 2 == 0, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::GateSet(g1, g2) => {
                             self.sample_gateset(
-                                &g1, &g2, d % 2 == 1, bound_conf, &mut gates);
+                                &g1, &g2, d % 2 == 0, bound_conf, &mut gates);
                             self.state.apply_circuit(&gates);
                         },
                         Feedback::Circuit(circ) => {

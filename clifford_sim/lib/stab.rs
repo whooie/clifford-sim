@@ -746,7 +746,7 @@ impl Stab {
                                 (xij5 & pwjj != 0 || zij5 & pwjj != 0)
                                     .then_some(jj)
                             })
-                            .map(|jj| (j5 << 5) + jj)
+                            .map(|jj| (j5 << 5) | jj)
                     });
                 let maybe_r
                     = xi.iter()
@@ -761,7 +761,7 @@ impl Stab {
                                 (xij5 & pwjj != 0 || zij5 & pwjj != 0)
                                     .then_some(jj)
                             })
-                            .map(|jj| (j5 << 5) + jj)
+                            .map(|jj| (j5 << 5) | jj)
                     });
                 maybe_l.zip(maybe_r)
                     .map(|(l, r)| {
@@ -770,7 +770,9 @@ impl Stab {
                     })
                     .unwrap_or(false)
             })
-            .count() as f32 * 0.5
+            .count() as f32
+                * 0.5
+                // * std::f32::consts::LN_2
 
     }
 
@@ -975,6 +977,7 @@ impl Stab {
             }
             acc.push(self.as_basis_state());
         }
+        acc.sort();
         Some(State(acc))
     }
 }
@@ -1181,7 +1184,7 @@ pub enum Postsel {
 }
 
 /// A qubit state in the standard (Z) basis.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Qubit {
     /// ∣0⟩
     Zero,
@@ -1203,6 +1206,19 @@ impl fmt::Display for Qubit {
 pub struct BasisState {
     pub phase: Phase,
     pub state: Vec<Qubit>,
+}
+
+impl PartialOrd for BasisState {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BasisState {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.state.cmp(&other.state)
+            .then(self.phase.cmp(&other.phase))
+    }
 }
 
 impl fmt::Display for BasisState {

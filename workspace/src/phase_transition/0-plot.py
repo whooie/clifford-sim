@@ -32,7 +32,7 @@ for (k, (pk, sk)) in enumerate(zip(p_meas, entropy)):
     .set_xlabel("System size")
     .set_ylabel("Entanglement entropy")
     .savefig(outdir.joinpath("phase_transition.png"))
-    .show()
+    # .show()
     .close()
 )
 

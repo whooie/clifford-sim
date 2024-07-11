@@ -43,6 +43,10 @@ name = "mutual_information"
 path = "src/clifford_test.rs"
 name = "clifford_test"
 
+[[bin]]
+path = "src/state.rs"
+name = "state"
+
 [profile.release]
 lto = true
 panic = "abort"

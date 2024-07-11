@@ -100,7 +100,7 @@ class Scan:
 
 def do_scan(data: Data, npoints: int=100) -> Scan:
     pc = np.linspace(data.p_meas.min(), data.p_meas.max(), npoints)
-    nu = np.linspace(0.2, 2.0, npoints)
+    nu = np.linspace(0.2, 3.5, npoints)
 
     coords = np.array([[pci, nuj] for pci in pc for nuj in nu])
     costfs = np.array([costf(data, *pc_nu) for pc_nu in coords])
@@ -136,7 +136,7 @@ class Fit:
 def do_collapse_fit(data: Data, pc0: float, nu0: float) -> Fit:
     params = lmfit.Parameters()
     params.add("pc", value=pc0, min=data.p_meas.min(), max=data.p_meas.max())
-    params.add("nu", value=nu0, min=0.2, max=2.0)
+    params.add("nu", value=nu0, min=0.2, max=3.5)
     fit = lmfit.minimize(
         residuals, params, args=(data.p_meas, data.size, data.s_mean))
     pc = ExpVal(fit.params["pc"].value, fit.params["pc"].stderr)

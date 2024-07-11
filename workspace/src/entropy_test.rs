@@ -3,12 +3,12 @@ use clifford_sim::circuit::*;
 use ndarray as nd;
 use whooie::{ mkdir, print_flush, write_npz };
 
-const N: usize = 256; // number of qubits
+const N: usize = 4; // number of qubits
 
 fn main() {
-    const MC: usize = 20;
-    const DEPTH: usize = 1000;
-    const P_MEAS: f32 = 0.08;
+    const MC: usize = 1000;
+    const DEPTH: usize = 4 * N;
+    const P_MEAS: f32 = 0.00;
 
     let outdir = PathBuf::from("output");
     mkdir!(outdir);
@@ -19,11 +19,14 @@ fn main() {
         let mut circuit = StabCircuit::new(N, None, None);
         let config = CircuitConfig {
             depth: DepthConfig::Const(DEPTH),
-            gates: GateConfig::Simple,
-            boundaries: BoundaryConfig::Periodic,
+            // gates: GateConfig::Simple,
+            gates: GateConfig::GateSet(G1Set::HS, G2Set::CZ),
+            // boundaries: BoundaryConfig::Periodic,
+            boundaries: BoundaryConfig::Open,
             measurement: MeasureConfig {
                 layer: MeasLayerConfig::Every,
                 prob: MeasProbConfig::Random(P_MEAS),
+                // prob: MeasProbConfig::cycling_prob(P_MEAS),
             },
         };
         s_acc += &nd::Array1::from(circuit.run_entropy(config, None));

@@ -34,13 +34,13 @@ fn eval_entropy(n: usize, p: f32, avg: usize) -> f32 {
             let config = CircuitConfig {
                 depth: DepthConfig::Const(4 * n),
                 // gates: GateConfig::Simple,
-                gates: GateConfig::GateSet(G1Set::H, G2Set::CZ),
+                gates: GateConfig::GateSet(G1Set::HS, G2Set::CZ),
                 boundaries: BoundaryConfig::Open,
                 measurement: MeasureConfig {
                     layer: MeasLayerConfig::Every,
                     // layer: MeasLayerConfig::Period(8),
-                    prob: MeasProbConfig::Random(p),
-                    // prob: MeasProbConfig::Cycling(p.recip().round() as usize),
+                    // prob: MeasProbConfig::Random(p),
+                    prob: MeasProbConfig::cycling_prob(p),
                     // prob: MeasProbConfig::Block((p * n as f32).round() as usize),
                 },
             };
@@ -53,7 +53,7 @@ fn eval_entropy(n: usize, p: f32, avg: usize) -> f32 {
 }
 
 fn main() {
-    const AVG: usize = 1000;
+    const AVG: usize = 2500;
 
     let outdir = PathBuf::from("output");
     mkdir!(outdir);
@@ -63,7 +63,7 @@ fn main() {
 
     let p_meas: nd::Array1<f32> = nd::Array1::linspace(0.05, 0.14, 10);
     let size: nd::Array1<u32> = (4..=20).step_by(2).collect();
-    // let size: nd::Array1<u32> = (2..=8_u32).map(|n| 2_u32.pow(n)).collect();
+    // let size: nd::Array1<u32> = (2..=7_u32).map(|n| 2_u32.pow(n)).collect();
     let caller = |q: &[usize]| -> (f32,) {
         (eval_entropy(size[q[1]] as usize, p_meas[q[0]], AVG),)
     };
