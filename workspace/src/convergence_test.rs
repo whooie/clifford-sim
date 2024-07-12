@@ -26,6 +26,7 @@ fn main() {
             measurement: MeasureConfig {
                 layer: MeasLayerConfig::Every,
                 prob: MeasProbConfig::Random(P_MEAS),
+                reset: false,
             },
         };
         let s = circuit.run_entropy(config, None);

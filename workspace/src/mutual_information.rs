@@ -31,6 +31,7 @@ use whooie::{
 //             measurement: MeasureConfig {
 //                 layer: MeasLayerConfig::Every,
 //                 prob: MeasProbConfig::Random(p),
+//                 reset: false,
 //             },
 //         };
 //         s += circuit.run_entropy(config, None)
@@ -66,6 +67,7 @@ fn eval_mutinf(n: usize, p: f32, depth: usize, avg: usize) -> f32 {
                     // prob: MeasProbConfig::Random(p),
                     // prob: MeasProbConfig::Cycling(p.recip().floor() as usize),
                     prob: MeasProbConfig::Block((p * n as f32).round() as usize),
+                    reset: false,
                 },
             };
             circuit.run_mutinf(config, Some(n / 2 - 2), None)
@@ -86,6 +88,7 @@ fn eval_mutinf(n: usize, p: f32, depth: usize, avg: usize) -> f32 {
     //         measurement: MeasureConfig {
     //             layer: MeasLayerConfig::Every,
     //             prob: MeasProbConfig::Random(p),
+    //             reset: false,
     //         },
     //     };
     //     inf += circuit.run_mutinf(config, Some(2 * n / 8), None)

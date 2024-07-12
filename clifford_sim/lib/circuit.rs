@@ -142,6 +142,7 @@ impl StabCircuit {
         fn do_measure(
             circ: &mut StabCircuit,
             pred: Pred,
+            reset: bool,
             buf: &mut [Option<Outcome>],
         ) {
             buf.iter_mut()
@@ -152,21 +153,33 @@ impl StabCircuit {
                             *outk = None;
                         },
                         Pred::Always => {
-                            *outk = Some(circ.state.measure(k, &mut circ.rng));
+                            *outk = if reset {
+                                Some(circ.state.measure_reset(k, &mut circ.rng))
+                            } else {
+                                Some(circ.state.measure(k, &mut circ.rng))
+                            };
                         },
                         Pred::Prob(p) => {
                             *outk = (circ.rng.gen::<f32>() < *p)
-                                .then(|| circ.state.measure(k, &mut circ.rng));
+                                .then(|| if reset {
+                                    circ.state.measure_reset(k, &mut circ.rng)
+                                } else {
+                                    circ.state.measure(k, &mut circ.rng)
+                                });
                         },
                         Pred::Func(f) => {
                             *outk = f(k)
-                                .then(|| circ.state.measure(k, &mut circ.rng));
+                                .then(|| if reset {
+                                    circ.state.measure_reset(k, &mut circ.rng)
+                                } else {
+                                    circ.state.measure(k, &mut circ.rng)
+                                });
                         },
                     }
                 });
         }
 
-        let MeasureConfig { layer, prob } = config;
+        let MeasureConfig { layer, prob, reset } = config;
         match layer {
             Every | Period(1) => {
                 let pred
@@ -195,7 +208,7 @@ impl StabCircuit {
                             )
                         }
                     };
-                do_measure(self, pred, buf);
+                do_measure(self, pred, reset, buf);
                 true
             },
             Period(m) if d % m == 0 => {
@@ -226,7 +239,7 @@ impl StabCircuit {
                             )
                         },
                     };
-                do_measure(self, pred, buf);
+                do_measure(self, pred, reset, buf);
                 true
             },
             _ => {
@@ -593,6 +606,8 @@ pub struct MeasureConfig {
     pub layer: MeasLayerConfig,
     /// Application of measurements within a single layer.
     pub prob: MeasProbConfig,
+    /// Apply a deterministic reset back to ∣0⟩ after each measurement.
+    pub reset: bool,
 }
 
 /// Define the conditions for when measurement layers are applied.

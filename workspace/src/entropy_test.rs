@@ -27,6 +27,7 @@ fn main() {
                 layer: MeasLayerConfig::Every,
                 prob: MeasProbConfig::Random(P_MEAS),
                 // prob: MeasProbConfig::cycling_prob(P_MEAS),
+                reset: false,
             },
         };
         s_acc += &nd::Array1::from(circuit.run_entropy(config, None));
