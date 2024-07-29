@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Callable, Self
 import lmfit
 import numpy as np
@@ -17,7 +18,7 @@ class Data:
         data = np.load(str(infile))
         p_meas = data["p_meas"]
         size = data["size"]
-        s_mean = data["entropy"]
+        s_mean = data["s_mean"]
         return Data(p_meas, size, s_mean)
 
 def interp(
@@ -100,7 +101,7 @@ class Scan:
 
 def do_scan(data: Data, npoints: int=100) -> Scan:
     pc = np.linspace(data.p_meas.min(), data.p_meas.max(), npoints)
-    nu = np.linspace(0.2, 3.5, npoints)
+    nu = np.linspace(0.2, 4.0, npoints)
 
     coords = np.array([[pci, nuj] for pci in pc for nuj in nu])
     costfs = np.array([costf(data, *pc_nu) for pc_nu in coords])
@@ -184,8 +185,11 @@ def do_collapse_fit(data: Data, pc0: float, nu0: float) -> Fit:
     return Fit(pc, nu, cost)
 
 def main():
+    fname = sys.argv[1] if len(sys.argv) > 1 else "output/phase_transition.npz"
+    print(f"reading from '{fname}'")
+
     outdir = Path("output")
-    infile = outdir.joinpath("phase_transition.npz")
+    infile = Path(fname)
     # infile = outdir.joinpath("phase_transition_p_meas=0.07..0.15_size=5..17.npz")
     # infile = outdir.joinpath("phase_transition_p_meas=0.12..0.20_size=4..22.npz")
     # infile = outdir.joinpath("phase_transition_p_meas=0.10..0.20_size=4..20.npz")

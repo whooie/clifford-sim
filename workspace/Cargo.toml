@@ -9,7 +9,7 @@ edition = "2021"
 # anyhow = "*"
 clifford-sim = { path = "../clifford_sim", version = "*" }
 itertools = "0.13.0"
-ndarray = "0.15.6"
+ndarray = { version = "0.15.6", features = [ "default", "rayon",] }
 num-complex = "0.4.6"
 rand = "0.8.5"
 rayon = "1.10.0"
