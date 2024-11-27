@@ -125,8 +125,9 @@ fn main() {
 
     let mut elems: Vec<Clifford> = Vec::new();
     let mut mats: Vec<nd::Array2<C32>> = Vec::new();
-    for _ in 0..MC {
-        // print!("\r {} / {} ", k + 1, MC);
+    eprint!("\r 0 / {} ", MC);
+    for k in 0..MC {
+        eprint!("\r {} / {} ", k + 1, MC);
         let cliff = Clifford::gen(N, &mut rng);
         // println!("{:?}", cliff);
         let mat = cliff_matrix(&cliff);
@@ -135,7 +136,8 @@ fn main() {
             elems.push(cliff);
         }
     }
-    println!("{} unique elements found from {} draws", mats.len(), MC);
+    eprintln!();
+    eprintln!("{} unique elements found from {} draws", mats.len(), MC);
     // for elem in elems.into_iter() {
     //     println!("{:?}", elem);
     // }

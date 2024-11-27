@@ -3,6 +3,7 @@
 
 use rand::{ rngs::StdRng, Rng, SeedableRng };
 use rustc_hash::FxHashSet as HashSet;
+use thiserror::Error;
 use crate::{
     gate::{ Clifford, Gate, G1, G2 },
     stab::{ Outcome, Partition, Stab },
@@ -386,7 +387,88 @@ impl StabCircuit {
     pub fn run(&mut self, mut config: CircuitConfig) {
         self.do_run(&mut config, None, None, None)
     }
+
+    fn do_run_fixed(
+        &mut self,
+        circ: &Circuit,
+        mut meas: Option<&mut MeasRecord>,
+        mut entropy: Option<&mut Vec<f32>>,
+        mut mutinf: Option<(&mut Vec<f32>, Option<usize>)>,
+    ) {
+        let Circuit { n: _, ops, reset } = circ;
+        let reset = *reset;
+        let mut outcomes: MeasLayer = vec![None; self.n];
+        if let Some(rcd) = entropy.as_mut() { rcd.push(self.entropy()); }
+        for layer in ops.iter() {
+            for gate in layer.gates.iter() {
+                self.state.apply_gate(*gate);
+            }
+
+            if reset {
+                for &k in layer.meas.iter() {
+                    if let Some(outk) = outcomes.get_mut(k) {
+                        *outk
+                            = Some(self.state.measure_reset(k, &mut self.rng));
+                    }
+                }
+            } else {
+                for &k in layer.meas.iter() {
+                    if let Some(outk) = outcomes.get_mut(k) {
+                        *outk
+                            = Some(self.state.measure(k, &mut self.rng));
+                    }
+                }
+            }
+            if let Some(rcd) = meas.as_mut() {
+                let mut tmp: MeasLayer = vec![None; self.n];
+                std::mem::swap(&mut tmp, &mut outcomes);
+                rcd.push(tmp);
+            }
+
+            if let Some(rcd) = entropy.as_mut() { rcd.push(self.entropy()); }
+
+            if let Some((rcd, part_size)) = mutinf.as_mut() {
+                rcd.push(self.state.mutual_information(*part_size));
+            }
+        }
+    }
+
+    /// Run the MIPT procedure for a completely fixed circuit.
+    ///
+    /// Returns the entanglement entropy measured once before the first layer,
+    /// and then after each round of measurements.
+    pub fn run_entropy_fixed(
+        &mut self,
+        circ: &Circuit,
+        meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32> {
+        let mut entropy: Vec<f32> = Vec::new();
+        self.do_run_fixed(circ, meas, Some(&mut entropy), None);
+        entropy
+    }
+
+    /// Run the MIPT procedure for a completely fixed circuit.
+    ///
+    /// Returns the mutual information measured once before the first layer, and
+    /// then after each round of measurements.
+    pub fn run_mutinf_fixed(
+        &mut self,
+        circ: &Circuit,
+        part_size: Option<usize>,
+        meas: Option<&mut MeasRecord>,
+    ) -> Vec<f32> {
+        let mut mutinf: Vec<f32> = Vec::new();
+        self.do_run_fixed(circ, meas, None, Some((&mut mutinf, part_size)));
+        mutinf
+    }
+
+    /// Run the MIPT procedure for a general config without recording any
+    /// time-evolution data.
+    pub fn run_fixed(&mut self, circ: &Circuit) {
+        self.do_run_fixed(circ, None, None, None)
+    }
 }
+
 
 struct Pairs {
     iter: std::ops::Range<usize>
@@ -673,4 +755,260 @@ pub struct CircuitConfig<'a> {
     /// Set conditions for measurements.
     pub measurement: MeasureConfig,
 }
+
+/// The operations in a single layer of a [`Circuit`].
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct OpLayer {
+    /// All unitary operations.
+    pub gates: Vec<Gate>,
+    /// The indices of the qubits to be measured.
+    pub meas: Vec<usize>,
+}
+
+#[derive(Debug, Error)]
+pub enum CircuitError {
+    #[error("non-constant depths are not supported by Circuit")]
+    NoDynDepth,
+
+    #[error("active-feedback circuits are not supported by Circuit")]
+    NoFeedback,
+}
+use CircuitError::*;
+pub type CircuitResult<T> = Result<T, CircuitError>;
+
+/// A fixed set of circuit operations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Circuit {
+    n: usize,
+    ops: Vec<OpLayer>,
+    reset: bool,
+}
+
+impl Circuit {
+    fn sample_simple<R>(
+        n: usize,
+        offs: bool,
+        bounds: BoundaryConfig,
+        ops: &mut OpLayer,
+        rng: &mut R,
+    )
+    where R: Rng + ?Sized
+    {
+        (0..n).for_each(|k| {
+            ops.gates.push(Gate::sample_single(k, rng));
+        });
+        match bounds {
+            BoundaryConfig::Open => {
+                Pairs::new(offs, n).for_each(|(a, b)| {
+                    ops.gates.push(Gate::CX(a, b));
+                });
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, n).for_each(|(a, b)| {
+                    ops.gates.push(Gate::CX(a, b));
+                });
+            },
+        }
+    }
+
+    fn sample_cliffs<R>(
+        n: usize,
+        offs: bool,
+        bounds: BoundaryConfig,
+        ops: &mut OpLayer,
+        rng: &mut R,
+    )
+    where R: Rng + ?Sized
+    {
+        match bounds {
+            BoundaryConfig::Open => {
+                Pairs::new(offs, n).for_each(|(a, _b)| {
+                    let mut gates = Clifford::gen(2, rng).unpack().0;
+                    gates.iter_mut().for_each(|g| { g.shift(a); });
+                    ops.gates.append(&mut gates);
+                });
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, n).for_each(|(a, _b)| {
+                    let mut gates = Clifford::gen(2, rng).unpack().0;
+                    gates.iter_mut().for_each(|g| { g.shift_mod(a, n); });
+                    ops.gates.append(&mut gates);
+                });
+            },
+        }
+    }
+
+    fn sample_gateset<R>(
+        n: usize,
+        g1: &G1Set,
+        g2: &G2Set,
+        offs: bool,
+        bounds: BoundaryConfig,
+        ops: &mut OpLayer,
+        rng: &mut R,
+    )
+    where R: Rng + ?Sized
+    {
+        (0..n).for_each(|k| { ops.gates.push(g1.sample(k, rng)); });
+        match bounds {
+            BoundaryConfig::Open => {
+                Pairs::new(offs, n).for_each(|(a, b)| {
+                    ops.gates.push(g2.sample(a, b, rng));
+                })
+            },
+            BoundaryConfig::Periodic => {
+                PairsPeriodic::new(offs, n).for_each(|(a, b)| {
+                    ops.gates.push(g2.sample(a, b, rng));
+                })
+            },
+        }
+    }
+
+    fn sample_measurements<R>(
+        n: usize,
+        d: usize,
+        config: MeasureConfig,
+        ops: &mut OpLayer,
+        rng: &mut R,
+    )
+    where R: Rng + ?Sized
+    {
+        use MeasLayerConfig::*;
+        use MeasProbConfig::*;
+
+        enum Pred<'a> {
+            Never,
+            Always,
+            Prob(f32),
+            Func(Box<dyn Fn(usize) -> bool + 'a>),
+        }
+
+        fn do_measure<R>(
+            n: usize,
+            pred: Pred,
+            ops: &mut OpLayer,
+            rng: &mut R,
+        )
+        where R: Rng + ?Sized
+        {
+            (0..n)
+                .filter(|k| {
+                    match &pred {
+                        Pred::Never => false,
+                        Pred::Always => true,
+                        Pred::Prob(p) => rng.gen::<f32>() < *p,
+                        Pred::Func(f) => f(*k),
+                    }
+                })
+                .for_each(|k| { ops.meas.push(k); });
+        }
+
+        let MeasureConfig { layer, prob, reset: _ } = config;
+        match layer {
+            Every | Period(1) => {
+                let pred
+                    =  match prob {
+                        Random(p) => Pred::Prob(p),
+                        Cycling(0) => Pred::Never,
+                        Cycling(1) => Pred::Always,
+                        Cycling(n) => Pred::Func(
+                            Box::new(move |k| k % n == d % n)),
+                        CyclingInv(0) => Pred::Always,
+                        CyclingInv(1) => Pred::Never,
+                        CyclingInv(n) => Pred::Func(
+                            Box::new(move |k| k % n != d % n)),
+                        Block(0) => Pred::Never,
+                        Block(b) => Pred::Func(
+                            Box::new(move |k| k / b == d % b)),
+                        Window(0) => Pred::Never,
+                        Window(w) => {
+                            let d = d as isize;
+                            let w = w as isize;
+                            let n = n as isize;
+                            Pred::Func(
+                                Box::new(move |k| {
+                                    (k as isize - d).rem_euclid(n) / w == 0
+                                })
+                            )
+                        }
+                    };
+                do_measure(n, pred, ops, rng);
+            },
+            Period(m) if d % m == 0 => {
+                let pred
+                    = match prob {
+                        Random(p) => Pred::Prob(p),
+                        Cycling(0) => Pred::Never,
+                        Cycling(1) => Pred::Always,
+                        Cycling(n) => Pred::Func(
+                            Box::new(move |k| k % n == (d / m) % n)),
+                        CyclingInv(0) => Pred::Always,
+                        CyclingInv(1) => Pred::Never,
+                        CyclingInv(n) => Pred::Func(
+                            Box::new(move |k| k % n != (d / m) % n)),
+                        Block(0) => Pred::Never,
+                        Block(b) => Pred::Func(
+                            Box::new(move |k| k / b == (d / m) % b)),
+                        Window(0) => Pred::Never,
+                        Window(w) => {
+                            let d = d as isize;
+                            let w = w as isize;
+                            let n = n as isize;
+                            let m = m as isize;
+                            Pred::Func(
+                                Box::new(move |k| {
+                                    (k as isize - d / m).rem_euclid(n) / w == 0
+                                })
+                            )
+                        },
+                    };
+                do_measure(n, pred, ops, rng);
+            },
+            _ => { },
+        }
+    }
+
+    /// Generate a fixed circuit description for `n` qubits from a
+    /// [`CircuitConfig`].
+    pub fn gen<R>(n: usize, config: CircuitConfig, rng: &mut R)
+        -> CircuitResult<Self>
+    where R: Rng + ?Sized
+    {
+        let CircuitConfig {
+            depth: depth_conf,
+            gates: gate_conf,
+            boundaries: bounds,
+            measurement: meas_conf,
+        } = config;
+        let DepthConfig::Const(depth) = depth_conf
+            else { return Err(NoDynDepth); };
+        if let GateConfig::Feedback(..) = &gate_conf { return Err(NoFeedback); }
+
+        let mut ops: Vec<OpLayer> = Vec::new();
+        let mut layer = OpLayer::default();
+        for d in 0..depth {
+            match &gate_conf {
+                GateConfig::Simple => {
+                    Self::sample_simple(n, d % 2 == 1, bounds, &mut layer, rng);
+                },
+                GateConfig::Clifford2 => {
+                    Self::sample_cliffs(n, d % 2 == 1, bounds, &mut layer, rng);
+                },
+                GateConfig::GateSet(ref g1, ref g2) => {
+                    Self::sample_gateset(
+                        n, g1, g2, d % 2 == 1, bounds, &mut layer, rng);
+                },
+                GateConfig::Circuit(circ) => {
+                    circ.iter().copied()
+                        .for_each(|gate| { layer.gates.push(gate); });
+                },
+                GateConfig::Feedback(..) => unreachable!(),
+            }
+            Self::sample_measurements(n, d, meas_conf, &mut layer, rng);
+            ops.push(std::mem::take(&mut layer));
+        }
+        Ok(Self { n, ops, reset: meas_conf.reset })
+    }
+}
+
 
