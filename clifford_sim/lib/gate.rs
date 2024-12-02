@@ -393,8 +393,8 @@ impl Gate {
         }
     }
 
-    // shift qubit indices by `d`
-    pub(crate) fn shift(&mut self, d: usize) {
+    /// Shift qubit indices by `d`.
+    pub fn shift(&mut self, d: usize) {
         match self {
             Self::H(a) => { *a += d; },
             Self::X(a) => { *a += d; },
@@ -408,8 +408,8 @@ impl Gate {
         }
     }
 
-    // shift qubit indices by `d`, modulo `m`
-    pub(crate) fn shift_mod(&mut self, d: usize, m: usize) {
+    /// Shift qubit indices by `d`, modulo `m`.
+    pub fn shift_mod(&mut self, d: usize, m: usize) {
         match self {
             Self::H(a) => { *a += d; *a %= m; },
             Self::X(a) => { *a += d; *a %= m; },

@@ -100,7 +100,6 @@ pub struct Stab {
 
 impl Stab {
     /// Create a new stabilizer state of size `n` initialized to ∣0...0⟩.
-    #[inline]
     pub fn new(n: usize) -> Self {
         let over32: usize = (n >> 5) + 1;
         let mut x: na::DMatrix<u32> = na::DMatrix::zeros(2 * n + 1, over32);
@@ -123,13 +122,11 @@ impl Stab {
     }
 
     /// Apply a Hadamard gate to the `k`-th qubit.
-    #[inline]
     pub fn apply_h(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_h_unchecked(k)
     }
 
-    #[inline]
     fn apply_h_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -149,13 +146,11 @@ impl Stab {
     }
 
     /// Apply an S gate (= Z(π/2)) to the `k`-th qubit.
-    #[inline]
     pub fn apply_s(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_s_unchecked(k)
     }
 
-    #[inline]
     fn apply_s_unchecked(&mut self, k: usize) -> &mut Self {
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -172,102 +167,109 @@ impl Stab {
     }
 
     /// Apply an S<sup>†</sup> gate (= Z(-π/2)) to the `k`-th qubit.
-    #[inline]
     pub fn apply_sinv(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_sinv_unchecked(k)
     }
 
-    #[inline]
     fn apply_sinv_unchecked(&mut self, k: usize) -> &mut Self {
-        let k5: usize = k >> 5;
-        let pw: u32 = PW[k & 31];
-        for ((x_i_k5, z_i_k5), r_i) in
-            self.x.column_mut(k5).iter_mut()
-                .zip(self.z.column_mut(k5).iter_mut())
-                .zip(self.r.iter_mut())
-                .take(2 * self.n)
-        {
-            if *x_i_k5 & pw != 0 && *z_i_k5 & pw == 0 { *r_i = (*r_i + 2) % 4; }
-            *z_i_k5 ^= *x_i_k5 & pw;
-        }
-        self
+        self.apply_s_unchecked(k)
+            .apply_s_unchecked(k)
+            .apply_s_unchecked(k)
+
+        // let k5: usize = k >> 5;
+        // let pw: u32 = PW[k & 31];
+        // for ((x_i_k5, z_i_k5), r_i) in
+        //     self.x.column_mut(k5).iter_mut()
+        //         .zip(self.z.column_mut(k5).iter_mut())
+        //         .zip(self.r.iter_mut())
+        //         .take(2 * self.n)
+        // {
+        //     if *x_i_k5 & pw != 0 && *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
+        //     *z_i_k5 ^= *x_i_k5 & pw;
+        // }
+        // self
     }
 
     /// Apply X gate to the `k`-th qubit.
-    #[inline]
     pub fn apply_x(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_x_unchecked(k)
     }
 
-    #[inline]
     fn apply_x_unchecked(&mut self, k: usize) -> &mut Self {
-        let k5: usize = k >> 5;
-        let pw: u32 = PW[k & 31];
-        for (z_i_k5, r_i) in
-            self.z.column_mut(k5).iter()
-                .zip(self.r.iter_mut())
-                .take(2 * self.n)
-        {
-            if *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
-        }
-        self
+        self.apply_h_unchecked(k)
+            .apply_z_unchecked(k)
+            .apply_h_unchecked(k)
+
+        // let k5: usize = k >> 5;
+        // let pw: u32 = PW[k & 31];
+        // for (z_i_k5, r_i) in
+        //     self.z.column_mut(k5).iter()
+        //         .zip(self.r.iter_mut())
+        //         .take(2 * self.n)
+        // {
+        //     if *z_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
+        // }
+        // self
     }
 
     /// Apply an Y gate to the `k`-th qubit.
-    #[inline]
     pub fn apply_y(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_y_unchecked(k)
     }
 
-    #[inline]
     fn apply_y_unchecked(&mut self, k: usize) -> &mut Self {
-        let k5: usize = k >> 5;
-        let pw: u32 = PW[k & 31];
-        for ((x_i_k5, z_i_k5), r_i) in
-            self.x.column(k5).iter()
-                .zip(self.z.column(k5).iter())
-                .zip(self.r.iter_mut())
-                .take(2 * self.n)
-        {
-            if (*z_i_k5 & pw != 0 && *x_i_k5 & pw == 0)
-                || (*z_i_k5 & pw == 0 && *x_i_k5 & pw != 0)
-            { *r_i = (*r_i + 2) % 4; }
-        }
-        self
+        self.apply_sinv_unchecked(k)
+            .apply_h_unchecked(k)
+            .apply_z_unchecked(k)
+            .apply_h_unchecked(k)
+            .apply_s_unchecked(k)
+
+        // let k5: usize = k >> 5;
+        // let pw: u32 = PW[k & 31];
+        // for ((x_i_k5, z_i_k5), r_i) in
+        //     self.x.column(k5).iter()
+        //         .zip(self.z.column(k5).iter())
+        //         .zip(self.r.iter_mut())
+        //         .take(2 * self.n)
+        // {
+        //     if (*z_i_k5 & pw != 0 && *x_i_k5 & pw == 0)
+        //         || (*z_i_k5 & pw == 0 && *x_i_k5 & pw != 0)
+        //     { *r_i = (*r_i + 2) % 4; }
+        // }
+        // self
     }
 
     /// Apply an Z gate to the `k`-th qubit.
-    #[inline]
     pub fn apply_z(&mut self, k: usize) -> &mut Self {
         if k >= self.n { return self; }
         self.apply_z_unchecked(k)
     }
 
-    #[inline]
     fn apply_z_unchecked(&mut self, k: usize) -> &mut Self {
-        let k5: usize = k >> 5;
-        let pw: u32 = PW[k & 31];
-        for (x_i_k5, r_i) in
-            self.x.column_mut(k5).iter()
-                .zip(self.r.iter_mut())
-                .take(2 * self.n)
-        {
-            if *x_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
-        }
-        self
+        self.apply_s_unchecked(k)
+            .apply_s_unchecked(k)
+
+        // let k5: usize = k >> 5;
+        // let pw: u32 = PW[k & 31];
+        // for (x_i_k5, r_i) in
+        //     self.x.column_mut(k5).iter()
+        //         .zip(self.r.iter_mut())
+        //         .take(2 * self.n)
+        // {
+        //     if *x_i_k5 & pw != 0 { *r_i = (*r_i + 2) % 4; }
+        // }
+        // self
     }
 
     /// Apply a CNOT gate to the `b`-th qubit, with the `a`-th qubit as control.
-    #[inline]
     pub fn apply_cnot(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_cnot_unchecked(a, b)
     }
 
-    #[inline]
     fn apply_cnot_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
         let a5: usize = a >> 5;
         let b5: usize = b >> 5;
@@ -281,10 +283,10 @@ impl Stab {
         {
             if x_i[a5] & pwa != 0 { x_i[b5] ^= pwb; }
             if z_i[b5] & pwb != 0 { z_i[a5] ^= pwa; }
-            if x_i[a5] & pwa != 0 && z_i[b5] & pwb != 0
+            if     x_i[a5] & pwa != 0 && z_i[b5] & pwb != 0
                 && x_i[b5] & pwb != 0 && z_i[a5] & pwa != 0
             { *r_i = (*r_i + 2) % 4; }
-            if x_i[a5] & pwa != 0 && z_i[b5] & pwb != 0
+            if     x_i[a5] & pwa != 0 && z_i[b5] & pwb != 0
                 && x_i[b5] & pwb == 0 && z_i[a5] & pwa == 0
             { *r_i = (*r_i + 2) % 4; }
         }
@@ -292,75 +294,78 @@ impl Stab {
     }
 
     /// Apply a CZ gate to the `a`-th and `b`-th qubits.
-    #[inline]
     pub fn apply_cz(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_cz_unchecked(a, b)
     }
 
-    #[inline]
     fn apply_cz_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        let a5: usize = a >> 5;
-        let b5: usize = b >> 5;
-        let pwa: u32 = PW[a & 31];
-        let pwb: u32 = PW[b & 31];
-        for ((x_i, mut z_i), r_i) in
-            self.x.row_iter()
-                .zip(self.z.row_iter_mut())
-                .zip(self.r.iter_mut())
-                .take(2 * self.n)
-        {
-            if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
-            { *r_i = (*r_i + 2) % 4; }
+        self.apply_h_unchecked(b)
+            .apply_cnot_unchecked(a, b)
+            .apply_h_unchecked(b)
 
-            if x_i[a5] & pwa != 0 { z_i[b5] ^= pwb; }
-            if x_i[b5] & pwb != 0 { z_i[a5] ^= pwa; }
-
-            if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
-                && z_i[b5] & pwb != 0 && z_i[a5] & pwa != 0
-            { *r_i = (*r_i + 2) % 4; }
-            if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
-                && z_i[b5] & pwb == 0 && z_i[a5] & pwa == 0
-            { *r_i = (*r_i + 2) % 4; }
-
-            if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
-            { *r_i = (*r_i + 2) % 4; }
-        }
-        self
+        // let a5: usize = a >> 5;
+        // let b5: usize = b >> 5;
+        // let pwa: u32 = PW[a & 31];
+        // let pwb: u32 = PW[b & 31];
+        // for ((x_i, mut z_i), r_i) in
+        //     self.x.row_iter()
+        //         .zip(self.z.row_iter_mut())
+        //         .zip(self.r.iter_mut())
+        //         .take(2 * self.n)
+        // {
+        //     if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
+        //     { *r_i = (*r_i + 2) % 4; }
+        //
+        //     if x_i[a5] & pwa != 0 { z_i[b5] ^= pwb; }
+        //     if x_i[b5] & pwb != 0 { z_i[a5] ^= pwa; }
+        //
+        //     if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
+        //         && z_i[b5] & pwb != 0 && z_i[a5] & pwa != 0
+        //     { *r_i = (*r_i + 2) % 4; }
+        //     if x_i[a5] & pwa != 0 && x_i[b5] & pwb != 0
+        //         && z_i[b5] & pwb == 0 && z_i[a5] & pwa == 0
+        //     { *r_i = (*r_i + 2) % 4; }
+        //
+        //     if x_i[b5] & pwb != 0 && z_i[b5] & pwb != 0
+        //     { *r_i = (*r_i + 2) % 4; }
+        // }
+        // self
     }
 
     /// Apply a SWAP gate to the `a`-th and `b`-th qubits.
-    #[inline]
     pub fn apply_swap(&mut self, a: usize, b: usize) -> &mut Self {
         if a >= self.n || b >= self.n || a == b { return self; }
         self.apply_swap_unchecked(a, b)
     }
 
-    #[inline]
     fn apply_swap_unchecked(&mut self, a: usize, b: usize) -> &mut Self {
-        let a5: usize = a >> 5;
-        let b5: usize = b >> 5;
-        let pwa: u32 = PW[a & 31];
-        let pwb: u32 = PW[b & 31];
-        let mut tmp: u32;
-        for (mut x_i, mut z_i) in
-            self.x.row_iter_mut()
-                .zip(self.z.row_iter_mut())
-        {
-            tmp = x_i[a5];
-            x_i[a5] ^= (x_i[a5] & pwa) ^ (x_i[b5] & pwb);
-            x_i[b5] ^= (x_i[b5] & pwb) ^ (tmp & pwa);
-            tmp = z_i[a5];
-            z_i[a5] ^= (z_i[a5] & pwa) ^ (z_i[b5] & pwb);
-            z_i[b5] ^= (z_i[b5] & pwb) ^ (tmp & pwa);
-        }
-        self
+        self.apply_cnot_unchecked(a, b)
+            .apply_cnot_unchecked(b, a)
+            .apply_cnot_unchecked(a, b)
+
+        // let a5: usize = a >> 5;
+        // let b5: usize = b >> 5;
+        // let pwa: u32 = PW[a & 31];
+        // let pwb: u32 = PW[b & 31];
+        // let mut tmp: u32;
+        // for (mut x_i, mut z_i) in
+        //     self.x.row_iter_mut()
+        //         .zip(self.z.row_iter_mut())
+        // {
+        //     tmp = x_i[a5];
+        //     x_i[a5] ^= (x_i[a5] & pwa) ^ (x_i[b5] & pwb);
+        //     x_i[b5] ^= (x_i[b5] & pwb) ^ (tmp & pwa);
+        //     tmp = z_i[a5];
+        //     z_i[a5] ^= (z_i[a5] & pwa) ^ (z_i[b5] & pwb);
+        //     z_i[b5] ^= (z_i[b5] & pwb) ^ (tmp & pwa);
+        // }
+        // self
     }
 
     /// Perform the action of a gate.
     ///
     /// Does nothing if any qubit indices are out of bounds.
-    #[inline]
     pub fn apply_gate(&mut self, gate: Gate) -> &mut Self {
         match gate {
             Gate::H(k) if k < self.n => self.apply_h_unchecked(k),
@@ -380,7 +385,6 @@ impl Stab {
     }
 
     /// Perform a series of gates.
-    #[inline]
     pub fn apply_circuit<'a, I>(&mut self, gates: I) -> &mut Self
     where I: IntoIterator<Item = &'a Gate>
     {
@@ -388,7 +392,6 @@ impl Stab {
         self
     }
 
-    #[inline]
     pub(crate) fn row_copy(&mut self, a: usize, b: usize) -> &mut Self {
         // set row b equal to row a
         for (mut x__j, mut z__j) in
@@ -403,7 +406,6 @@ impl Stab {
     }
 
     // swap rows a and b
-    #[inline]
     pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
         let n = self.n;
         self.row_copy(b, 2 * n)
@@ -412,7 +414,6 @@ impl Stab {
     }
 
     // set row k equal to the o-th observable (X_1, ..., X_n, Z_1, ..., Z_n)
-    #[inline]
     pub(crate) fn row_set(&mut self, o: usize, k: usize) -> &mut Self {
         let o5: usize;
         let o31: usize;
@@ -433,7 +434,6 @@ impl Stab {
 
     // return the phase (0, ..., 3) when row b's operator is left-multiplied by
     // row a's operator
-    #[inline]
     pub(crate) fn row_mul_phase(&self, a: usize, b: usize) -> u8 {
         let mut e: i32 = 0;
         let xa = self.x.row(a);
@@ -450,7 +450,7 @@ impl Stab {
                 }
                 if xaj & pw != 0 && zaj & pw != 0 {
                     if xbj & pw == 0 && zbj & pw != 0 { e += 1; }
-                    if xbj & pw != 0 && zbj * pw == 0 { e -= 1; }
+                    if xbj & pw != 0 && zbj & pw == 0 { e -= 1; }
                 }
                 if xaj & pw == 0 && zaj & pw != 0 {
                     if xbj & pw != 0 && zbj & pw == 0 { e += 1; }
@@ -464,7 +464,6 @@ impl Stab {
 
     // left-multiply row b's operator by row a's operator and store the result
     // in row b
-    #[inline]
     pub(crate) fn row_mul(&mut self, a: usize, b: usize) -> &mut Self {
         self.r[b] = self.row_mul_phase(a, b);
         for (mut x__j, mut z__j) in
@@ -483,7 +482,6 @@ impl Stab {
     /// **Note**: this measurement is either deterministic (when the target
     /// qubit is ∣±z⟩) or random (otherwise). For post-selected measurements,
     /// see [`Self::measure_postsel`].
-    #[inline]
     pub fn measure<R>(&mut self, k: usize, rng: &mut R) -> Outcome
     where R: Rng + ?Sized
     {
@@ -537,11 +535,99 @@ impl Stab {
         }
     }
 
+    // extract a row as a separate object
+    pub(crate) fn extract_row(&self, k: usize) -> StabRow {
+        let x: na::DVector<u32> = self.x.row(k).transpose();
+        let z: na::DVector<u32> = self.z.row(k).transpose();
+        let r: u8 = self.r[k];
+        StabRow { x, z, r }
+    }
+
+    // return the phase (0, ..., 3) when row s's operator is left-multiplied by
+    // row k's operator
+    pub(crate) fn row_mul_phase_s(&self, k: usize, s: &StabRow) -> u8 {
+        let mut e: i32 = 0;
+        let xk = self.x.row(k);
+        let zk = self.z.row(k);
+        for ((&xkj, &xsj), (&zkj, &zsj)) in
+            xk.iter().zip(s.x.iter()).zip(zk.iter().zip(s.z.iter()))
+        {
+            for &pw in PW.iter() {
+                if xkj & pw != 0 && zkj & pw == 0 {
+                    if xsj & pw != 0 && zsj & pw != 0 { e += 1; }
+                    if xsj & pw == 0 && zsj & pw != 0 { e -= 1; }
+                }
+                if xkj & pw != 0 && zkj & pw != 0 {
+                    if xsj & pw == 0 && zsj & pw != 0 { e += 1; }
+                    if xsj & pw != 0 && zsj & pw == 0 { e -= 1; }
+                }
+                if xkj & pw == 0 && zkj & pw != 0 {
+                    if xsj & pw != 0 && zsj & pw == 0 { e += 1; }
+                    if xsj & pw != 0 && zsj & pw != 0 { e -= 1; }
+                }
+            }
+        }
+        e = (e + i32::from(s.r) + i32::from(self.r[k])).rem_euclid(4);
+        e as u8
+    }
+
+    // left-multiply row s's operator by row k's operator and store the result
+    // in row s
+    pub(crate) fn row_mul_s(&self, k: usize, s: &mut StabRow) {
+        s.r = self.row_mul_phase_s(k, s);
+        let xk = self.x.row(k);
+        let zk = self.z.row(k);
+        for ((&xkj, xsj), (&zkj, zsj)) in
+            xk.iter().zip(s.x.iter_mut()).zip(zk.iter().zip(s.z.iter_mut()))
+        {
+            *xsj ^= xkj;
+            *zsj ^= zkj;
+        }
+    }
+
+    /// Return the single-qubit Z-basis measurement probabilities for the `k`-th
+    /// qubit, but do not actually perform a measurement.
+    ///
+    /// Note that these probabilities are always either exactly even or
+    /// concentrated on one of the two possible outcomes.
+    pub fn probs(&self, k: usize) -> (f64, f64) {
+        let mut rnd: bool = false;
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        let mut m: usize = 0;
+
+        for x_qpN_k5 in
+            self.x.column(k5).iter()
+                .take(2 * self.n)
+                .skip(self.n)
+        {
+            rnd = *x_qpN_k5 & pw != 0;
+            if rnd { break; }
+        }
+        if rnd {
+            (0.5, 0.5)
+        } else {
+            for (q, x_q_k5) in
+                self.x.column(k5).iter()
+                    .take(self.n)
+                    .enumerate()
+            {
+                if x_q_k5 & pw != 0 { m = q; break; }
+            }
+            let mut scratch = self.extract_row(m + self.n);
+            for i in m + 1..self.n {
+                if self.x[(i, k5)] & pw != 0 {
+                    self.row_mul_s(i + self.n, &mut scratch);
+                }
+            }
+            if scratch.r != 0 { (0.0, 1.0) } else { (1.0, 0.0) }
+        }
+    }
+
     /// Like [`Self::measure`], but deterministically reset the qubit state to
     /// ∣0⟩ after the measurement.
     ///
     /// The outcome of the original measurement is returned.
-    #[inline]
     pub fn measure_reset<R>(&mut self, k: usize, rng: &mut R) -> Outcome
     where R: Rng + ?Sized
     {
@@ -559,7 +645,6 @@ impl Stab {
     /// the `self` must be invalidated. This method therefore consumes `self`,
     /// returning it as a [`Ok`] if the post-selection was valid and [`Err`]
     /// otherwise.
-    #[inline]
     pub fn measure_postsel(mut self, k: usize, postsel: Postsel)
         -> Result<Self, Box<Self>>
     {
@@ -707,7 +792,6 @@ impl Stab {
     /// Calculate the entanglement entropy of the state in a given subsystem.
     ///
     /// The partition defaults to the leftmost `floor(n / 2)` qubits.
-    #[inline]
     pub fn entanglement_entropy(&self, part: Option<Partition>) -> f32 {
         let part = part.unwrap_or(Partition::Left(self.n / 2 - 1));
 
@@ -782,7 +866,6 @@ impl Stab {
     /// The subsystem size defaults to `floor(3 * n / 8)`.
     ///
     /// *Panics* if the subsystem size is greater than `floor(n / 2)`.
-    #[inline]
     pub fn mutual_information(&self, size: Option<usize>) -> f32 {
         let size = size.unwrap_or(3 * self.n / 8);
         if size > self.n / 2 {
@@ -847,7 +930,7 @@ impl Stab {
     //
     // returns the number of such generators, equal to the log_2 of the number
     // of nonzero basis states
-    fn gaussian_elim(&mut self) -> usize {
+    pub(crate) fn gaussian_elim(&mut self) -> usize {
         let mut j5: usize;
         let mut pw: u32;
         let mut maybe_k: Option<usize>;
@@ -980,6 +1063,22 @@ impl Stab {
         acc.sort();
         Some(State(acc))
     }
+
+    /// Like [`as_kets`][Self::as_kets], but cloning `self` before Gaussian
+    /// elimination is performed, in order to prevent the row order from being
+    /// modified.
+    pub fn as_kets_cloned(&self) -> Option<State> {
+        let mut clone = self.clone();
+        clone.as_kets()
+    }
+}
+
+// a single row in a `Stab`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StabRow {
+    pub(crate) x: na::DVector<u32>,
+    pub(crate) z: na::DVector<u32>,
+    pub(crate) r: u8,
 }
 
 /// Describes a subset of a [`Stab`] (assumed as a linear chain with periodic
@@ -1086,7 +1185,6 @@ impl Partition {
     }
 
     /// Return `true` if `self` contains `k`.
-    #[inline]
     pub fn contains(&self, k: usize) -> bool {
         match self {
             Self::Left(r) => k < *r,
@@ -1098,7 +1196,6 @@ impl Partition {
 
     /// Returns the number of qubits contained in `self`, with consideration for
     /// fixed total system size `n`.
-    #[inline]
     pub fn size(&self, n: usize) -> usize {
         match self {
             Self::Left(r) => (*r).min(n),

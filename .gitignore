@@ -3,4 +3,5 @@
 **.svg
 **.pdf
 **.npz
+**/output/*.txt
 **.gv

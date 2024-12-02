@@ -148,7 +148,7 @@ fn main() {
             .write(true)
             .truncate(true)
             .append(false)
-            .open("cliffords.txt")
+            .open("output/cliffords.txt")
             .unwrap();
         for elem in elems.into_iter() {
             writeln!(out, "{:?}", elem.unpack().0).unwrap();
