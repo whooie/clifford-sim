@@ -42,8 +42,8 @@ impl StabCircuit {
         seed: Option<u64>,
     ) -> Self
     {
-        let rng
-            = seed.map(StdRng::seed_from_u64)
+        let rng =
+            seed.map(StdRng::seed_from_u64)
             .unwrap_or_else(StdRng::from_entropy);
         Self { state: Stab::new(n), part, n, rng }
     }
@@ -183,8 +183,8 @@ impl StabCircuit {
         let MeasureConfig { layer, prob, reset } = config;
         match layer {
             Every | Period(1) => {
-                let pred
-                    =  match prob {
+                let pred =
+                    match prob {
                         Random(p) => Pred::Prob(p),
                         Cycling(0) => Pred::Never,
                         Cycling(1) => Pred::Always,
@@ -213,8 +213,8 @@ impl StabCircuit {
                 true
             },
             Period(m) if d % m == 0 => {
-                let pred
-                    = match prob {
+                let pred =
+                    match prob {
                         Random(p) => Pred::Prob(p),
                         Cycling(0) => Pred::Never,
                         Cycling(1) => Pred::Always,
@@ -906,8 +906,8 @@ impl Circuit {
         let MeasureConfig { layer, prob, reset: _ } = config;
         match layer {
             Every | Period(1) => {
-                let pred
-                    =  match prob {
+                let pred =
+                    match prob {
                         Random(p) => Pred::Prob(p),
                         Cycling(0) => Pred::Never,
                         Cycling(1) => Pred::Always,
@@ -935,8 +935,8 @@ impl Circuit {
                 do_measure(n, pred, ops, rng);
             },
             Period(m) if d % m == 0 => {
-                let pred
-                    = match prob {
+                let pred =
+                    match prob {
                         Random(p) => Pred::Prob(p),
                         Cycling(0) => Pred::Never,
                         Cycling(1) => Pred::Always,

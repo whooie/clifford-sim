@@ -67,6 +67,17 @@ impl Phase {
         }
     }
 
+    /// Convert from a bare multiple of π/4 (modulo 8).
+    pub fn from_uint(u: u8) -> Self {
+        match u % 4 {
+            0 => Self::Pi0,
+            1 => Self::Pi1h,
+            2 => Self::Pi,
+            3 => Self::Pi3h,
+            _ => unreachable!(),
+        }
+    }
+
     pub fn as_complex(self) -> C64 {
         match self {
             Self::Pi0  => 1.0_f64.into(),
@@ -622,8 +633,7 @@ impl Tableau {
                         = $idx_scratch.into_iter()
                         .chunks(2).into_iter()
                         .map(|mut chunk| {
-                            let Some(a)
-                                = chunk.next() else { unreachable!() };
+                            let Some(a) = chunk.next() else { unreachable!() };
                             if let Some(b) = chunk.next() {
                                 $tab.cnot(a, b);
                             }

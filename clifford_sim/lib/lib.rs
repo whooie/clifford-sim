@@ -8,7 +8,9 @@
 //! integer multiples of π/2).
 
 pub mod tree;
+pub mod indexmap;
 pub mod stab;
+pub mod stabm;
 pub mod gate;
 pub mod circuit;
 pub mod graph;

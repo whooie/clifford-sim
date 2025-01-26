@@ -27,10 +27,10 @@
 //! which are *O*(*N*) in runtime. Thus, the tableau representation enables
 //! efficient classical simulation of Clifford circuits.
 //!
-//! The code in this module is pretty much a direct translation of Scott
-//! Aaronson's code (see [arXiv:quant-ph/0406196][tableau] for details on his
-//! extension and [here][chp] for his implementation) with some extra parts to
-//! calculate entanglement entropy from [arXiv:1901.08092][entropy].
+//! The core of the code in this module is pretty much a direct translation of
+//! Scott Aaronson's code (see [arXiv:quant-ph/0406196][tableau] for details on
+//! his extension and [here][chp] for his implementation) with some extra parts
+//! to calculate entanglement entropy from [arXiv:1901.08092][entropy].
 //!
 //! # Example
 //! ```
@@ -45,11 +45,18 @@
 //!
 //! // print out the stabilizers and destabilizers
 //! println!("{:#}", stab.as_group()); // `#` formatter suppresses identities
-//! // +1 XX... | +1 Z....
-//! // +1 ZZ... | +1 .X...
-//! // +1 ..Z.. | +1 ..X..
-//! // +1 ...Z. | +1 ...X.
-//! // +1 ....Z | +1 ....X
+//! // Destab
+//! // +1 Z....
+//! // +1 .X...
+//! // +1 ..X..
+//! // +1 ...X.
+//! // +1 ....X
+//! // Stab
+//! // +1 XX...
+//! // +1 ZZ...
+//! // +1 ..Z..
+//! // +1 ...Z.
+//! // +1 ....Z
 //!
 //! // convert to ket notation; fails if there are > 2^31 basis states
 //! println!("{}", stab.as_kets().unwrap());
@@ -63,8 +70,6 @@
 //! [chp]: https://www.scottaaronson.com/chp/
 //! [entropy]: https://arxiv.org/abs/1901.08092
 
-#![allow(unused_imports)]
-
 use std::{ fmt, rc::Rc };
 use nalgebra as na;
 use rand::Rng;
@@ -74,7 +79,7 @@ use crate::{
 };
 
 // PW[i] == 2^i
-const PW: [u32; 32] = [
+pub const PW: [u32; 32] = [
     0x00000001, 0x00000002, 0x00000004, 0x00000008,
     0x00000010, 0x00000020, 0x00000040, 0x00000080,
     0x00000100, 0x00000200, 0x00000400, 0x00000800,
@@ -90,12 +95,11 @@ const PW: [u32; 32] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stab {
     pub(crate) n: usize,
-    // `x` and `z` are bit arrays of size (2n + 1) × n; for space efficiency,
-    // the columns are packed into u32s
+    // `x` and `z` are bit arrays of size (2n + 1) × n;
+    // for efficiency, the columns are packed into u32s
     pub(crate) x: na::DMatrix<u32>, // Pauli-X bits; size (2n + 1) × (floor(N / 8) + 1)
     pub(crate) z: na::DMatrix<u32>, // Pauli-Z bits; size (2n + 1) × (floor(N / 8) + 1)
     pub(crate) r: na::DVector<u8>, // Phases (0 for +1, 1 for i, 2 for -1, 3 for -i); size 2n + 1
-    pub(crate) over32: usize, // = floor(N / 8) + 1
 }
 
 impl Stab {
@@ -106,8 +110,8 @@ impl Stab {
         let mut z: na::DMatrix<u32> = na::DMatrix::zeros(2 * n + 1, over32);
         let r: na::DVector<u8> = na::DVector::zeros(2 * n + 1);
         let mut j: usize;
-        let iter
-            = x.row_iter_mut().take(n)
+        let iter =
+            x.row_iter_mut().take(n)
             .chain(z.row_iter_mut().skip(n).take(n))
             .enumerate();
         for (i, mut row) in iter {
@@ -118,8 +122,11 @@ impl Stab {
                 row[j >> 5] = PW[j & 31];
             }
         }
-        Self { n, x, z, r, over32 }
+        Self { n, x, z, r }
     }
+
+    /// Return the number of qubits.
+    pub fn num_qubits(&self) -> usize { self.n }
 
     /// Apply a Hadamard gate to the `k`-th qubit.
     pub fn apply_h(&mut self, k: usize) -> &mut Self {
@@ -407,10 +414,15 @@ impl Stab {
 
     // swap rows a and b
     pub(crate) fn row_swap(&mut self, a: usize, b: usize) -> &mut Self {
-        let n = self.n;
-        self.row_copy(b, 2 * n)
-            .row_copy(a, b)
-            .row_copy(2 * n, a)
+        self.x.swap_rows(a, b);
+        self.z.swap_rows(a, b);
+        self.r.swap_rows(a, b);
+        self
+
+        // let n = self.n;
+        // self.row_copy(b, 2 * n)
+        //     .row_copy(a, b)
+        //     .row_copy(2 * n, a)
     }
 
     // set row k equal to the o-th observable (X_1, ..., X_n, Z_1, ..., Z_n)
@@ -590,7 +602,7 @@ impl Stab {
     ///
     /// Note that these probabilities are always either exactly even or
     /// concentrated on one of the two possible outcomes.
-    pub fn probs(&self, k: usize) -> (f64, f64) {
+    pub fn probs(&self, k: usize) -> Probs {
         let mut rnd: bool = false;
         let k5: usize = k >> 5;
         let pw: u32 = PW[k & 31];
@@ -605,7 +617,7 @@ impl Stab {
             if rnd { break; }
         }
         if rnd {
-            (0.5, 0.5)
+            Probs::Rand
         } else {
             for (q, x_q_k5) in
                 self.x.column(k5).iter()
@@ -620,7 +632,7 @@ impl Stab {
                     self.row_mul_s(i + self.n, &mut scratch);
                 }
             }
-            if scratch.r != 0 { (0.0, 1.0) } else { (1.0, 0.0) }
+            if scratch.r != 0 { Probs::Det1 } else { Probs::Det0 }
         }
     }
 
@@ -632,9 +644,7 @@ impl Stab {
     where R: Rng + ?Sized
     {
         let outcome = self.measure(k, rng);
-        if outcome == Outcome::Rand1 || outcome == Outcome::Det1 {
-            self.apply_x(k);
-        }
+        if outcome.is_1() { self.apply_x(k); }
         outcome
     }
 
@@ -699,19 +709,19 @@ impl Stab {
     pub fn as_group(&self) -> StabGroup {
         let mut j5: usize;
         let mut pw: u32;
-        let mut npauli: NPauli
-            = NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
+        let mut npauli: NPauli =
+            NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
         let mut stab: Vec<NPauli> = vec![npauli.clone(); self.n];
         let mut destab: Vec<NPauli> = vec![npauli.clone(); self.n];
-        let iter
-            = self.x.row_iter()
+        let iter =
+            self.x.row_iter()
             .zip(self.z.row_iter())
             .zip(self.r.iter())
             .take(2 * self.n)
             .zip(destab.iter_mut().chain(stab.iter_mut()));
         for (((xi, zi), ri), g) in iter {
-            npauli.phase
-                = match ri {
+            npauli.phase =
+                match ri {
                     0 => Phase::Pi0,
                     1 => Phase::Pi1h,
                     2 => Phase::Pi,
@@ -728,66 +738,8 @@ impl Stab {
             }
             *g = npauli.clone();
         }
-        StabGroup { stab, destab }
+        StabGroup { destab, stab }
     }
-
-    // /// Convert `self` to a bare tableau representation of only the stabilizer
-    // /// group.
-    // ///
-    // /// Here, the "tableau" representation is an `N × 2N` binary matrix with an
-    // /// extra vector of length `N` specifying the phase of each stabilizer as
-    // /// a power on *i* (that is, the phase of the `i`-th stabilizer is given by
-    // /// *i* raised to the value of the `i`-th element of the vector). For `0 ≤
-    // /// i, j < N`, the `i`-th row is the `i`-th element of the stabilizer group
-    // /// while the `j`-th and `N + j`-th columns identify the Pauli operator
-    // /// acting on the `j`-th qubit. For tableau `T`,
-    // ///
-    // /// | <code>T[_, j]</code> | <code>T[_, N + j]</code> | Pauli |
-    // /// | :------------------: | :----------------------: | :---: |
-    // /// | 0                    | 0                        | *I*   |
-    // /// | 1                    | 0                        | *X*   |
-    // /// | 1                    | 1                        | *Y*   |
-    // /// | 0                    | 1                        | *Z*   |
-    // pub fn as_tableau(&self) -> (nd::Array2<u8>, nd::Array1<u8>) {
-    //     let mut j5: usize;
-    //     let mut pw: u32;
-    //     let mut tab: nd::Array2<u8> = nd::Array2::zeros((self.n, 2 * self.n));
-    //     let ph: nd::Array1<u8> = self.r.slice(nd::s![..self.n]).to_owned();
-    //     for ((xi, zi), mut ti) in
-    //         self.x.axis_iter(nd::Axis(0))
-    //         .zip(self.z.axis_iter(nd::Axis(0)))
-    //         .zip(tab.axis_iter_mut(nd::Axis(0)))
-    //     {
-    //         for j in 0..self.n {
-    //             j5 = j >> 5;
-    //             pw = PW[j & 31];
-    //             ti[j] = (xi[j5] & pw).try_into().unwrap();
-    //             ti[self.n + j] = (zi[j5] & pw).try_into().unwrap();
-    //         }
-    //     }
-    //     (tab, ph)
-    // }
-    //
-    // // like `as_tableau`, but outputting f32s for entanglement entropy
-    // // calculations via matrix rank via SV, and without the phases
-    // fn as_tableau_f32(&self) -> nd::Array2<f32> {
-    //     let mut j5: usize;
-    //     let mut pw: u32;
-    //     let mut tab: nd::Array2<f32> = nd::Array2::zeros((self.n, 2 * self.n));
-    //     for ((xi, zi), mut ti) in
-    //         self.x.axis_iter(nd::Axis(0))
-    //         .zip(self.z.axis_iter(nd::Axis(0)))
-    //         .zip(tab.axis_iter_mut(nd::Axis(0)))
-    //     {
-    //         for j in 0..self.n {
-    //             j5 = j >> 5;
-    //             pw = PW[j & 31];
-    //             ti[j] = (xi[j5] & pw) as f32;
-    //             ti[self.n + j] = (zi[j5] & pw) as f32;
-    //         }
-    //     }
-    //     tab
-    // }
 
     /// Calculate the entanglement entropy of the state in a given subsystem.
     ///
@@ -819,8 +771,8 @@ impl Stab {
             .skip(self.n)
             .take(self.n)
             .filter(|(xi, zi)| {
-                let maybe_l
-                    = xi.iter()
+                let maybe_l =
+                    xi.iter()
                     .zip(zi)
                     .enumerate()
                     .find_map(|(j5, (xij5, zij5))| {
@@ -832,8 +784,8 @@ impl Stab {
                             })
                             .map(|jj| (j5 << 5) | jj)
                     });
-                let maybe_r
-                    = xi.iter()
+                let maybe_r =
+                    xi.iter()
                     .zip(zi)
                     .enumerate()
                     .rev()
@@ -854,10 +806,7 @@ impl Stab {
                     })
                     .unwrap_or(false)
             })
-            .count() as f32
-                * 0.5
-                // * std::f32::consts::LN_2
-
+            .count() as f32 * 0.5
     }
 
     /// Calculate the mutual information between two subsystems of a given size,
@@ -923,9 +872,9 @@ impl Stab {
 
     // do Gaussian elimination to put the stabilizer generators in the following
     // form:
-    // - at the top, a minimal set of generators containins X's and Y's, in
+    // - at the top, a minimal set of generators containing X's and Y's, in
     //   "quasi-upper-triangular" form
-    // - at the bottom, generators containins Z's only in
+    // - at the bottom, generators containing Z's only in
     //   quasi-upper-triangular form
     //
     // returns the number of such generators, equal to the log_2 of the number
@@ -1023,8 +972,8 @@ impl Stab {
                 e = (e + 1) % 4;
             }
         }
-        let phase
-            = match e % 4 {
+        let phase =
+            match e % 4 {
                 0 => Phase::Pi0,
                 1 => Phase::Pi1h,
                 2 => Phase::Pi,
@@ -1048,8 +997,8 @@ impl Stab {
     pub fn as_kets(&mut self) -> Option<State> {
         let g = self.gaussian_elim();
         if g > 31 { return None; }
-        let mut acc: Vec<BasisState>
-            = Vec::with_capacity(2_usize.pow(g as u32));
+        let mut acc: Vec<BasisState> =
+            Vec::with_capacity(2_usize.pow(g as u32));
         self.seed_scratch(g);
         acc.push(self.as_basis_state());
         let mut t2: u32;
@@ -1228,25 +1177,38 @@ impl fmt::Display for NPauli {
     }
 }
 
-/// The complete `n`-qubit stabilizer/destabilizer groups for a given state.
+/// The complete `n`-qubit stabilizer/destabilizer generators for a given state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StabGroup {
-    pub stab: Vec<NPauli>,
     pub destab: Vec<NPauli>,
+    pub stab: Vec<NPauli>,
 }
 
 impl fmt::Display for StabGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let n = self.stab.len();
-        for (k, (stab, destab)) in
-            self.stab.iter().zip(&self.destab).enumerate()
-        {
-            stab.fmt(f)?;
-            write!(f, " | ")?;
+        writeln!(f, "Destab")?;
+        for destab in self.destab.iter() {
             destab.fmt(f)?;
+            writeln!(f)?;
+        }
+        writeln!(f, "Stab")?;
+        let n = self.stab.len();
+        for (k, stab) in self.stab.iter().enumerate() {
+            stab.fmt(f)?;
             if k < n - 1 { writeln!(f)?; }
         }
         Ok(())
+
+        // let n = self.stab.len();
+        // for (k, (stab, destab)) in
+        //     self.stab.iter().zip(&self.destab).enumerate()
+        // {
+        //     stab.fmt(f)?;
+        //     write!(f, " | ")?;
+        //     destab.fmt(f)?;
+        //     if k < n - 1 { writeln!(f)?; }
+        // }
+        // Ok(())
     }
 }
 
@@ -1279,6 +1241,52 @@ pub enum Postsel {
     /// Pose-selection for ∣1⟩
     One,
 }
+
+/// The measurement probabilities for a single-qubit measurement. In stabilizer
+/// states/circuits, these probabilities are always either exactly even or
+/// concentrated on one of the two possible outcomes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Probs {
+    /// Probability is concentrated in ∣0⟩
+    Det0,
+    /// Probability is concentrated in ∣1⟩
+    Det1,
+    /// Probabilities are exactly even
+    Rand,
+}
+
+impl Probs {
+    /// Convert to a tuple of ordinary floating-point numbers, with the first
+    /// corresponding to the ∣0⟩ measurement probability.
+    pub fn as_floats(self) -> (f64, f64) {
+        match self {
+            Self::Det0 => (1.0, 0.0),
+            Self::Det1 => (0.0, 1.0),
+            Self::Rand => (0.5, 0.5),
+        }
+    }
+}
+
+impl From<Probs> for (f64, f64) {
+    fn from(probs: Probs) -> Self { probs.as_floats() }
+}
+
+// pub(crate) enum DoMeasure<R> {
+//     Rand(R),
+//     Postsel(Postsel),
+// }
+//
+// impl<R> DoMeasure<R>
+// where R: Rng
+// {
+//     // return zero or one
+//     pub(crate) fn gen_r(&mut self) -> u8 {
+//         match self {
+//             Self::Rand(rng) => u8::from(rng.gen::<bool>()),
+//             Self::Postsel(postsel) => *postsel as u8,
+//         }
+//     }
+// }
 
 /// A qubit state in the standard (Z) basis.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

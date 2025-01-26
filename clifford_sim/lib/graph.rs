@@ -258,8 +258,8 @@ impl Graph {
 
     /// Return a generating set for the stabilizer group of `self`.
     pub fn stabilizers(&self) -> Stabilizers {
-        let npauli: NPauli
-            = NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
+        let npauli: NPauli =
+            NPauli { phase: Phase::Pi0, ops: vec![Pauli::I; self.n] };
         let mut stabs: Vec<NPauli> = vec![npauli.clone(); self.n];
         for (i, stab) in stabs.iter_mut().enumerate() {
             for (j, pauli) in stab.ops.iter_mut().enumerate() {
@@ -287,8 +287,8 @@ impl Graph {
                 self.disconnect_node_unchecked(node);
             },
             Basis::X => {
-                let some_neighbor: Option<usize>
-                    = self.neighbors_of(node).next();
+                let some_neighbor: Option<usize> =
+                    self.neighbors_of(node).next();
                 if let Some(k) = some_neighbor {
                     self.local_complement_unchecked(k);
                     self.local_complement_unchecked(node);
@@ -312,10 +312,10 @@ impl Graph {
         // 3. the bottom-right block (rows N..2 * N of Z) should be the
         //    adjacency matrix of the graph
         let over32: usize = (self.n >> 5) + 1;
-        let mut x: na::DMatrix<u32>
-            = na::DMatrix::zeros(2 * self.n + 1, over32);
-        let mut z: na::DMatrix<u32>
-            = na::DMatrix::zeros(2 * self.n + 1, over32);
+        let mut x: na::DMatrix<u32> =
+            na::DMatrix::zeros(2 * self.n + 1, over32);
+        let mut z: na::DMatrix<u32> =
+            na::DMatrix::zeros(2 * self.n + 1, over32);
         let r: na::DVector<u8> = na::DVector::zeros(2 * self.n + 1);
         for (i, mut xi) in
             x.row_iter_mut().skip(self.n).take(self.n).enumerate()
@@ -334,7 +334,7 @@ impl Graph {
             j5 = a >> 5;
             z[(b, j5)] ^= 1 << (a & 31);
         }
-        Stab { n: self.n, x, z, r, over32 }
+        Stab { n: self.n, x, z, r }
     }
 
     /// Convert from a [`Stab`].
@@ -412,8 +412,8 @@ impl Graph {
         const NODE_COLOR: Color = Color::Rgb(115, 150, 250);
 
         // initial declarations
-        let mut statements
-            = StmtList::new()
+        let mut statements =
+            StmtList::new()
             .add_attr(
                 AttrType::Node,
                 AttrList::new()
@@ -424,8 +424,8 @@ impl Graph {
             );
         // add nodes
         for k in 0..self.n {
-            let attrs
-                = AttrList::new()
+            let attrs =
+                AttrList::new()
                 .add_pair(label(k.to_string()))
                 .add_pair(shape(Shape::Circle))
                 .add_pair(height(NODE_HEIGHT))
