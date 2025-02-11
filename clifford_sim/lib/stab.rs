@@ -73,6 +73,7 @@
 use std::{ fmt, rc::Rc };
 use nalgebra as na;
 use rand::Rng;
+use thiserror::Error;
 use crate::{
     gate::{ Gate, Pauli, Phase },
     graph::Graph,
@@ -651,8 +652,9 @@ impl Stab {
     /// Like [`Self::measure`], but deterministically post-selects on a desired
     /// measurement outcome.
     ///
-    /// The tradeoff is that if the desired outcome is incompatible with `self`,
-    /// the `self` must be invalidated. This method therefore consumes `self`,
+    /// The tradeoff is that if the desired outcome is incompatible with `self`
+    /// (e.g. a qubit is entirely in the ∣0⟩ state, but we post-select to ∣1⟩),
+    /// then `self` must be invalidated. This method therefore consumes `self`,
     /// returning it as a [`Ok`] if the post-selection was valid and [`Err`]
     /// otherwise.
     pub fn measure_postsel(mut self, k: usize, postsel: Postsel)
@@ -700,6 +702,58 @@ impl Stab {
                 (true,  Postsel::One ) => Ok(self),
                 (false, Postsel::Zero) => Ok(self),
                 _ => Err(self.into()),
+            }
+        }
+    }
+
+    /// Like [`Self::measure_postsel`], but taking `self` as a reference and
+    /// returning `Err(_)` for invalid post-selections.
+    pub fn measure_postsel_checked(&mut self, k: usize, postsel: Postsel)
+        -> Result<&mut Self, InvalidPostsel>
+    {
+        let mut rnd: bool = false;
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        let mut p: usize = 0;
+        let mut m: usize = 0;
+
+        for (q, x_qpN_k5) in
+            self.x.column(k5).iter()
+                .take(2 * self.n)
+                .skip(self.n)
+                .enumerate()
+        {
+            rnd = *x_qpN_k5 & pw != 0;
+            if rnd { p = q; break; }
+        }
+
+        if rnd {
+            self.row_copy(p + self.n, p);
+            self.row_set(k + self.n, p + self.n);
+            self.r[p + self.n] = 2 * postsel as u8;
+            for i in 0..2 * self.n {
+                if i != p && self.x[(i, k5)] & pw != 0 { self.row_mul(p, i); }
+            }
+            Ok(self)
+        } else {
+            for (q, x_q_k5) in
+                self.x.column(k5).iter()
+                    .take(self.n)
+                    .enumerate()
+            {
+                if x_q_k5 & pw != 0 { m = q; break; }
+            }
+            self.row_copy(m + self.n, 2 * self.n);
+            for i in m + 1..self.n {
+                if self.x[(i, k5)] & pw != 0 {
+                    self.row_mul(i + self.n, 2 * self.n);
+                }
+            }
+            match (self.r[2 * self.n] != 0, postsel) {
+                (true,  Postsel::One ) => Ok(self),
+                (false, Postsel::Zero) => Ok(self),
+                (true,  Postsel::Zero) => Err(InvalidPostsel(1, 0)),
+                (false, Postsel::One ) => Err(InvalidPostsel(0, 1)),
             }
         }
     }
@@ -1021,6 +1075,16 @@ impl Stab {
         clone.as_kets()
     }
 }
+
+/// Marks an invalid measurement post-selection.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Error)]
+#[error("attempted to post-select a ∣{0}⟩ state to ∣{1}⟩")]
+pub struct InvalidPostsel(
+    /// Current qubit state
+    pub u8,
+    /// Attempted post-selection
+    pub u8,
+);
 
 // a single row in a `Stab`
 #[derive(Clone, Debug, PartialEq, Eq)]

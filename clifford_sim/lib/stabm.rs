@@ -352,6 +352,74 @@ impl StabM {
         }
     }
 
+    /// Like [`Self::measure_postsel`], but taking `self` as a reference and
+    /// returning `Err(_)` for invalid post-selections.
+    pub fn measure_postsel_checked(&mut self, k: usize, postsel: Postsel)
+        -> Result<&mut Self, InvalidPostsel>
+    {
+        let mut rnd: bool = false;
+        let k5: usize = k >> 5;
+        let pw: u32 = PW[k & 31];
+        let mut p: usize = 0;
+        let mut m: usize = 0;
+
+        for (q, x_q_k5) in
+            self.stab.x.column(k5).iter()
+                .enumerate()
+                .take(2 * self.stab.n)
+                .skip(self.m)
+        {
+            rnd = *x_q_k5 & pw != 0;
+            if rnd { p = q; break; }
+        }
+
+        if rnd && (self.stab.n .. self.stab.n + self.m).contains(&p) {
+            self.stab.row_copy(p, p - self.stab.n);
+            self.stab.row_set(k + self.stab.n, p);
+            self.stab.r[p] = 2 * postsel as u8;
+            for i in 0 .. 2 * self.stab.n {
+                if i != p - self.stab.n && self.stab.x[(i, k5)] & pw != 0 {
+                    self.stab.row_mul(p - self.stab.n, i);
+                }
+            }
+            Ok(self)
+        } else if rnd {
+            let pconj = self.row_idx_conj(p);
+            self.stab.row_copy(p, pconj);
+            self.stab.row_set(k + self.stab.n, p);
+            self.stab.r[p] = 2 * postsel as u8;
+            for i in 0 .. 2 * self.stab.n {
+                if i != pconj && self.stab.x[(i, k5)] & pw != 0 {
+                    self.stab.row_mul(pconj, i);
+                }
+            }
+            self.stab.row_swap(p, self.stab.n + self.m);
+            if p != self.m { self.stab.row_swap(pconj, self.m); }
+            self.m += 1;
+            Ok(self)
+        } else {
+            for (q, x_q_k5) in
+                self.stab.x.column(k5).iter()
+                    .take(self.stab.n)
+                    .enumerate()
+            {
+                if x_q_k5 & pw != 0 { m = q; break; }
+            }
+            self.stab.row_copy(m + self.stab.n, 2 * self.stab.n);
+            for i in m + 1 .. self.stab.n {
+                if self.stab.x[(i, k5)] & pw != 0 {
+                    self.stab.row_mul(i + self.stab.n, 2 * self.stab.n);
+                }
+            }
+            match (self.stab.r[2 * self.stab.n] != 0, postsel) {
+                (true,  Postsel::One ) => Ok(self),
+                (false, Postsel::Zero) => Ok(self),
+                (true,  Postsel::Zero) => Err(InvalidPostsel(1, 0)),
+                (false, Postsel::One ) => Err(InvalidPostsel(0, 1)),
+            }
+        }
+    }
+
     /// Convert `self` to a more human-readable stabilizer/destabilizer group
     /// representation.
     pub fn as_group(&self) -> StabMGroup {
