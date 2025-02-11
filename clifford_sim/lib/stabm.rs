@@ -1246,9 +1246,6 @@ impl XZSystem {
         let mut exprs: Vec<BExpr> = Vec::with_capacity(2 * self.nxz);
         for var_idx in 0 .. 2 * self.nxz {
             match self.count_col(var_idx).unwrap() {
-                BColNub::Empty => {
-                    exprs.push(BExpr { offs: 0, deps: Vec::with_capacity(0) });
-                },
                 BColNub::One(row_idx) => {
                     let rlead = self.row_leader(row_idx).unwrap();
                     let offs: u32 = self.rhs[row_idx].into();
@@ -1270,7 +1267,7 @@ impl XZSystem {
                     }
                     exprs.push(BExpr { offs, deps });
                 },
-                BColNub::Many => {
+                BColNub::Empty | BColNub::Many => {
                     if let Some(free) = free_idx.get(var_idx) {
                         exprs.push(BExpr { offs: 0, deps: vec![*free] });
                     } else {
@@ -1313,6 +1310,43 @@ impl XZSystem {
             if *rhs_i != 0 { print!("| 1 ]"); } else { print!("| 0 ]"); }
             println!();
         }
+    }
+}
+
+impl fmt::Display for XZSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let iter =
+            self.lhs_x.iter().zip(self.lhs_z.iter()).zip(self.rhs.iter());
+        let mut j5: usize;
+        let mut pw: u32;
+        for ((lhs_x_i, lhs_z_i), rhs_i) in iter {
+            write!(f, "[ ")?;
+            for j in 0..self.nxz {
+                j5 = j >> 5;
+                pw = PW[j & 31];
+                if lhs_x_i[j5] & pw != 0 {
+                    write!(f, "1 ")?;
+                } else {
+                    write!(f, "0 ")?;
+                }
+            }
+            write!(f, ": ")?;
+            for j in 0..self.nxz {
+                j5 = j >> 5;
+                pw = PW[j & 31];
+                if lhs_z_i[j5] & pw != 0 {
+                    write!(f, "1 ")?;
+                } else {
+                    write!(f, "0 ")?;
+                }
+            }
+            if *rhs_i != 0 {
+                writeln!(f, "| 1 ]")?;
+            } else {
+                writeln!(f, "| 0 ]")?;
+            }
+        }
+        Ok(())
     }
 }
 
